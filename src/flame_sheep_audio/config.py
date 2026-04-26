@@ -38,6 +38,8 @@ DEFAULTS = {
         'rms_alpha': 0.9,
         'centroid_alpha': 0.85,
         'percussiveness_alpha': 0.92,
+        'slow_attack_alpha': 0.995,    # ~2s half-life at 93fps (HOP cadence)
+        'slow_release_alpha': 0.98,    # ~0.5s half-life
     },
     'density': {
         'window': 1.0,

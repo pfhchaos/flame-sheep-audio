@@ -21,8 +21,10 @@ class BandState:
     """Per-band audio metrics — same structure for every band."""
     rms: float = 0.0
     harmonic_rms: float = 0.0
+    slow_rms: float = 0.0           # slow-attack envelope of RMS (~2s)
+    slow_harmonic_rms: float = 0.0  # slow-attack envelope of harmonic RMS (~2s)
     onset_density: float = 0.0
-    density_delta: float = 0.0   # first derivative of onset density
+    density_delta: float = 0.0      # first derivative of onset density
 
 
 def _default_bands(band_config=None) -> dict[str, BandState]:

@@ -30,6 +30,10 @@ class EnergyAnalyzer:
         self._band_rms = {name: 0.0 for name in self._masks}
         self._band_harmonic_rms = {name: 0.0 for name in self._masks}
 
+        # Slow envelope per band (asymmetric attack/release)
+        self._slow_rms = {name: 0.0 for name in self._masks}
+        self._slow_harmonic_rms = {name: 0.0 for name in self._masks}
+
         # Centroid tracking
         self._centroid = 1000.0
         self._prev_centroid = 1000.0
@@ -59,13 +63,23 @@ class EnergyAnalyzer:
         alpha = self._alpha
 
         # Per-band RMS and harmonic RMS (unified loop)
+        slow_attack = cfg.energy.slow_attack_alpha
+        slow_release = cfg.energy.slow_release_alpha
         for name, mask in self._masks.items():
             raw = float(np.sqrt(np.mean(spectrum[mask] ** 2)))
             self._band_rms[name] = alpha * self._band_rms[name] + (1 - alpha) * raw
+            # Slow envelope: asymmetric attack/release
+            rms = self._band_rms[name]
+            sa = slow_attack if rms > self._slow_rms[name] else slow_release
+            self._slow_rms[name] = sa * self._slow_rms[name] + (1 - sa) * rms
             if stability is not None:
                 raw_h = stability.harmonic_rms(spectrum, mask)
                 self._band_harmonic_rms[name] = (
                     alpha * self._band_harmonic_rms[name] + (1 - alpha) * raw_h)
+                hrms = self._band_harmonic_rms[name]
+                sha = slow_attack if hrms > self._slow_harmonic_rms[name] else slow_release
+                self._slow_harmonic_rms[name] = (
+                    sha * self._slow_harmonic_rms[name] + (1 - sha) * hrms)
 
         # Spectral centroid (A-weighted for perceptual accuracy)
         weighted_spec = spectrum * A_WEIGHTS
@@ -112,6 +126,16 @@ class EnergyAnalyzer:
     def band_harmonic_rms_all(self) -> dict[str, float]:
         """Per-band harmonic RMS for all analysis bands."""
         return dict(self._band_harmonic_rms)
+
+    @property
+    def band_slow_rms_all(self) -> dict[str, float]:
+        """Per-band slow-envelope RMS (~2s attack, ~0.5s release)."""
+        return dict(self._slow_rms)
+
+    @property
+    def band_slow_harmonic_rms_all(self) -> dict[str, float]:
+        """Per-band slow-envelope harmonic RMS (~2s attack, ~0.5s release)."""
+        return dict(self._slow_harmonic_rms)
 
     @property
     def centroid(self) -> float:

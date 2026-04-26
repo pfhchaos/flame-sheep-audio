@@ -164,12 +164,16 @@ class AudioProcessor:
                 # Build per-band state
                 band_rms = self._energy.band_rms_all
                 band_hrms = self._energy.band_harmonic_rms_all
+                band_slow = self._energy.band_slow_rms_all
+                band_slow_h = self._energy.band_slow_harmonic_rms_all
                 densities = self._density.densities
                 density_deltas = self._density.density_deltas
                 for name in self._bands:
                     self._bands[name] = BandState(
                         rms=band_rms.get(name, 0.0),
                         harmonic_rms=band_hrms.get(name, 0.0),
+                        slow_rms=band_slow.get(name, 0.0),
+                        slow_harmonic_rms=band_slow_h.get(name, 0.0),
                         onset_density=densities.get(name, 0.0),
                         density_delta=density_deltas.get(name, 0.0),
                     )
@@ -192,6 +196,8 @@ class AudioProcessor:
     def _build_snapshot(self, events: list[BeatEvent]) -> AudioSnapshot:
         """Build AudioSnapshot from current shared state (call under lock)."""
         bands = {name: BandState(rms=bs.rms, harmonic_rms=bs.harmonic_rms,
+                                 slow_rms=bs.slow_rms,
+                                 slow_harmonic_rms=bs.slow_harmonic_rms,
                                  onset_density=bs.onset_density,
                                  density_delta=bs.density_delta)
                  for name, bs in self._bands.items()}
@@ -251,12 +257,16 @@ class AudioProcessor:
             self._percussiveness = self._energy.percussiveness
             band_rms = self._energy.band_rms_all
             band_hrms = self._energy.band_harmonic_rms_all
+            band_slow = self._energy.band_slow_rms_all
+            band_slow_h = self._energy.band_slow_harmonic_rms_all
             densities = self._density.densities
             density_deltas = self._density.density_deltas
             for name in self._bands:
                 self._bands[name] = BandState(
                     rms=band_rms.get(name, 0.0),
                     harmonic_rms=band_hrms.get(name, 0.0),
+                    slow_rms=band_slow.get(name, 0.0),
+                    slow_harmonic_rms=band_slow_h.get(name, 0.0),
                     onset_density=densities.get(name, 0.0),
                     density_delta=density_deltas.get(name, 0.0),
                 )
