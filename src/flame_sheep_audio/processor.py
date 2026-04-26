@@ -52,12 +52,15 @@ class AudioProcessor:
                                           stability=self._stability,
                                           band_config=band_config)
         self._energy = EnergyAnalyzer(band_config=band_config)
-        self._tempo = AutocorrelationTempoTracker(
-            hop_duration=HOP_SIZE / SAMPLE_RATE)
         self._density = OnsetDensityTracker(band_config=band_config)
 
         # Auto-detect: FeedSource is synchronous, everything else is threaded
         self._threaded = not isinstance(self._source, FeedSource)
+
+        # ACF tempo tracker: frame cadence depends on mode
+        # Threaded: HOP_SIZE hops (~10.7ms). Sync: FFT_SIZE frames (~42.7ms).
+        frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
+        self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
 
         # Shared state (lock-protected, read by drain(), written by audio thread or process())
         self._lock     = threading.Lock()
