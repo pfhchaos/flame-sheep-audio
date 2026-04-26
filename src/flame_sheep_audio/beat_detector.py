@@ -169,8 +169,11 @@ class FluxBeatDetector:
                     headroom = 1.0 / (1.0 + local_avg * 10.0)
                     thresh *= (1.0 + stab * self.STABILITY_SCALING * headroom)
                 if local_avg < self.MIN_FLUX:
-                    events.append(BeatEvent(kind=band, energy=1.0))
-                    self._cooldown_frames[band] = self._frame_count[band]
+                    # Near-silence: only fire if flux is substantially above
+                    # noise floor, not just above MIN_FLUX
+                    if band_flux > self.MIN_FLUX * 1000:
+                        events.append(BeatEvent(kind=band, energy=1.0))
+                        self._cooldown_frames[band] = self._frame_count[band]
                 elif band_flux > local_avg * thresh:
                     normalized = min(1.0,
                         (band_flux / local_avg - thresh) / thresh)
