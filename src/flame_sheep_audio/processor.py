@@ -26,7 +26,6 @@ from .onset_density import OnsetDensityTracker
 from .stability import MagnitudeStability
 from .tempo_acf import AutocorrelationTempoTracker
 from ._band_config import BandConfig, default_band_config
-from ._bands import A_WEIGHTS
 
 
 class AudioProcessor:
@@ -137,9 +136,8 @@ class AudioProcessor:
                                 stability=self._stability)
             events = self._detector.detect(frame)
 
-            # Feed ACF tempo tracker with onset strength (A-weighted flux sum)
-            onset_strength = float(np.dot(frame.flux, A_WEIGHTS))
-            self._tempo.feed(onset_strength)
+            # Feed ACF tempo tracker with onset strength
+            self._tempo.feed(frame.onset_strength)
 
             # Feed density tracker
             for event in events:
@@ -230,8 +228,7 @@ class AudioProcessor:
         events = self._detector.detect(frame)
 
         # Feed ACF tempo tracker
-        onset_strength = float(np.dot(frame.flux, A_WEIGHTS))
-        self._tempo.feed(onset_strength)
+        self._tempo.feed(frame.onset_strength)
 
         # Feed density tracker
         now = time.perf_counter()

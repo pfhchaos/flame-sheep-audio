@@ -4,7 +4,12 @@ import numpy as np
 from dataclasses import dataclass
 from scipy.signal import windows
 
-from ._constants import FFT_SIZE, N_BINS, SAMPLE_RATE
+from ._constants import FFT_SIZE, N_BINS, SAMPLE_RATE, FREQS
+from ._bands import a_weight_curve
+
+
+# Precomputed A-weighting for onset strength
+_A_WEIGHTS = a_weight_curve(FREQS)
 
 
 @dataclass
@@ -13,6 +18,7 @@ class SpectrumFrame:
     magnitude: np.ndarray    # (N_BINS,) float32, FFT magnitude spectrum
     flux: np.ndarray         # (N_BINS,) float32, half-wave rectified spectral flux
     waveform: np.ndarray     # (FFT_SIZE,) float32, raw PCM window
+    onset_strength: float = 0.0  # A-weighted flux sum — scalar for tempo tracking
 
 
 class SpectrumEngine:
@@ -51,6 +57,7 @@ class SpectrumEngine:
             magnitude=magnitude,
             flux=flux,
             waveform=pcm.copy(),
+            onset_strength=float(np.dot(flux, _A_WEIGHTS)),
         )
 
     def push_hop(self, hop: np.ndarray) -> SpectrumFrame:
