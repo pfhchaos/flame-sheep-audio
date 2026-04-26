@@ -87,6 +87,20 @@ class AutocorrelationTempoTracker:
         self._locked = False
         self._has_estimate = False
 
+        # Temporal confidence: ring buffer of recent BPM estimates
+        self._recent_bpms: list[float] = []
+        self._temporal_confidence = 0.0
+        self._TEMPORAL_WINDOW = 10  # ~5 seconds of ACF updates
+
+        # Last confident BPM: replaces default in effective_bpm blend
+        self._last_confident_bpm = float(cfg.tempo.default_bpm)
+
+        # BPM delta: dual-EMA (fast ~0.5s, slow ~3s)
+        self._bpm_fast_ema = 0.0
+        self._bpm_slow_ema = 0.0
+        self._BPM_FAST_ALPHA = 0.3   # fast EMA: ~1 ACF update to converge
+        self._BPM_SLOW_ALPHA = 0.85  # slow EMA: ~6 ACF updates (~3s)
+
         # External hint
         self._hint_bpm: float | None = None
 
@@ -180,22 +194,47 @@ class AutocorrelationTempoTracker:
                 self._bpm = (BPM_SMOOTH_ALPHA * self._bpm
                              + (1 - BPM_SMOOTH_ALPHA) * raw_bpm)
 
-        self._confidence = confidence
+        # Temporal confidence: how stable have recent estimates been?
+        self._recent_bpms.append(raw_bpm)
+        if len(self._recent_bpms) > self._TEMPORAL_WINDOW:
+            self._recent_bpms = self._recent_bpms[-self._TEMPORAL_WINDOW:]
+        if len(self._recent_bpms) >= 3:
+            arr = np.array(self._recent_bpms)
+            mean = arr.mean()
+            if mean > 0:
+                cv = arr.std() / mean  # coefficient of variation
+                self._temporal_confidence = min(1.0, max(0.0, 1.0 - cv * 10))
+            else:
+                self._temporal_confidence = 0.0
 
-        # Lock/unlock
+        # Combined confidence: best of spatial (this snapshot) or temporal (stability)
+        self._confidence = max(confidence, self._temporal_confidence)
+
+        # Update last confident BPM
         if self._confidence >= LOCK_THRESHOLD:
+            self._last_confident_bpm = self._bpm
             self._locked = True
         elif self._confidence < UNLOCK_THRESHOLD:
             self._locked = False
+
+        # BPM delta: dual-EMA difference (fast - slow = trend)
+        if self._has_estimate:
+            fa = self._BPM_FAST_ALPHA
+            sa = self._BPM_SLOW_ALPHA
+            self._bpm_fast_ema = fa * self._bpm_fast_ema + (1 - fa) * self._bpm
+            self._bpm_slow_ema = sa * self._bpm_slow_ema + (1 - sa) * self._bpm
 
     def hint_tempo(self, bpm: float):
         """Provide external tempo hint."""
         if MIN_BPM <= bpm <= MAX_BPM:
             self._hint_bpm = bpm
             self._bpm = bpm
+            self._last_confident_bpm = bpm
             self._confidence = 0.5
             self._has_estimate = True
             self._locked = False
+            self._bpm_fast_ema = bpm
+            self._bpm_slow_ema = bpm
 
     def song_started(self):
         """Reset for new song."""
@@ -210,9 +249,14 @@ class AutocorrelationTempoTracker:
         self._bpm = 0.0
         self._raw_bpm = 0.0
         self._confidence = 0.0
+        self._temporal_confidence = 0.0
         self._locked = False
         self._has_estimate = False
         self._hint_bpm = None
+        self._recent_bpms.clear()
+        self._last_confident_bpm = float(cfg.tempo.default_bpm)
+        self._bpm_fast_ema = 0.0
+        self._bpm_slow_ema = 0.0
 
     @property
     def bpm(self) -> float:
@@ -220,11 +264,21 @@ class AutocorrelationTempoTracker:
 
     @property
     def effective_bpm(self) -> float:
-        """BPM blended with default based on confidence."""
-        default = cfg.tempo.default_bpm
+        """BPM blended with last confident estimate based on confidence.
+
+        When confident, returns the current estimate. When unsure, blends
+        toward the last value we were confident about (not an arbitrary
+        default). Initializes to default_bpm, updated by hints and locks.
+        """
         if not self._has_estimate:
-            return float(default)
-        return default * (1 - self._confidence) + self._bpm * self._confidence
+            return self._last_confident_bpm
+        return (self._last_confident_bpm * (1 - self._confidence)
+                + self._bpm * self._confidence)
+
+    @property
+    def bpm_delta(self) -> float:
+        """Rate of change of tempo (BPM/s). Positive = accelerando."""
+        return self._bpm_fast_ema - self._bpm_slow_ema
 
     @property
     def confidence(self) -> float:
