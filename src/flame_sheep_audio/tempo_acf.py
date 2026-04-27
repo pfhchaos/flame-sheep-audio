@@ -214,7 +214,11 @@ class AutocorrelationTempoTracker:
                              + (1 - BPM_SMOOTH_ALPHA) * raw_bpm)
 
         # Temporal confidence: how stable have recent estimates been?
-        self._recent_bpms.append(raw_bpm)
+        # Only count estimates where spatial confidence was meaningful —
+        # consistent weak measurements shouldn't produce high confidence
+        SPATIAL_FLOOR = 0.3
+        if confidence >= SPATIAL_FLOOR:
+            self._recent_bpms.append(raw_bpm)
         if len(self._recent_bpms) > self._TEMPORAL_WINDOW:
             self._recent_bpms = self._recent_bpms[-self._TEMPORAL_WINDOW:]
         if len(self._recent_bpms) >= 3:
@@ -226,8 +230,10 @@ class AutocorrelationTempoTracker:
             else:
                 self._temporal_confidence = 0.0
 
-        # Combined confidence: best of spatial (this snapshot) or temporal (stability)
-        self._confidence = max(confidence, self._temporal_confidence)
+        # Combined confidence: temporal can boost spatial but not override it.
+        # Cap temporal at 2x spatial so weak-but-consistent signals stay low.
+        capped_temporal = min(self._temporal_confidence, confidence * 2.5)
+        self._confidence = max(confidence, capped_temporal)
 
         # Update last confident BPM
         if self._confidence >= LOCK_THRESHOLD:
