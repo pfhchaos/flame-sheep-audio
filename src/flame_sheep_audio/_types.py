@@ -54,6 +54,7 @@ class AudioState:
 
     # Global
     percussiveness: float = 0.5
+    section_change: float = 0.0      # centroid divergence (fast-slow EMA, normalized)
     bpm: float = 0.0
     effective_bpm: float = 120.0     # blended with default based on confidence
     tempo_confidence: float = 0.0    # ACF tempo tracker confidence (0..1)
@@ -83,7 +84,7 @@ class AudioSnapshot:
 
     # Global
     percussiveness: float = 0.5
-    zcr_variance: float = 0.0
+    section_change: float = 0.0
     bpm: float = 0.0
     effective_bpm: float = 120.0
     tempo_confidence: float = 0.0

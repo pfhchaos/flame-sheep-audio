@@ -40,6 +40,12 @@ class EnergyAnalyzer:
         self._centroid_rms = 0.0
         self._centroid_alpha = cfg.energy.centroid_alpha
 
+        # Section change detection: dual-EMA on centroid
+        self._centroid_fast = 1000.0  # ~2s half-life
+        self._centroid_slow = 1000.0  # ~15s half-life
+        self._CENTROID_FAST_ALPHA = 0.995   # ~2s at HOP cadence
+        self._CENTROID_SLOW_ALPHA = 0.9993  # ~15s at HOP cadence
+
         # Percussiveness tracking
         self._percussiveness = 0.5
         self._perc_alpha = cfg.energy.percussiveness_alpha
@@ -89,6 +95,12 @@ class EnergyAnalyzer:
             self._prev_centroid = self._centroid
             self._centroid = (self._centroid_alpha * self._centroid
                               + (1 - self._centroid_alpha) * raw_centroid)
+
+            # Section change dual-EMA
+            fa = self._CENTROID_FAST_ALPHA
+            sa = self._CENTROID_SLOW_ALPHA
+            self._centroid_fast = fa * self._centroid_fast + (1 - fa) * self._centroid
+            self._centroid_slow = sa * self._centroid_slow + (1 - sa) * self._centroid
 
             # RMS around centroid (±1 octave)
             lo_c = self._centroid / 2
@@ -146,6 +158,19 @@ class EnergyAnalyzer:
     def centroid_delta(self) -> float:
         """Absolute change in centroid since last frame (Hz)."""
         return abs(self._centroid - self._prev_centroid)
+
+    @property
+    def section_change(self) -> float:
+        """Section change signal: divergence between fast and slow centroid EMAs.
+
+        Normalized by the slow EMA so the value is scale-independent.
+        Near 0 = stable section, large positive = brighter section change,
+        large negative = darker section change. Absolute value > ~0.3
+        typically indicates a meaningful section boundary.
+        """
+        if self._centroid_slow > 0:
+            return (self._centroid_fast - self._centroid_slow) / self._centroid_slow
+        return 0.0
 
     @property
     def centroid_rms(self) -> float:

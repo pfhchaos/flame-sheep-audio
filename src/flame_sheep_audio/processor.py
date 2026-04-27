@@ -71,6 +71,7 @@ class AudioProcessor:
         self._centroid_rms = 0.0
         self._centroid_harmonic_rms = 0.0
         self._percussiveness = 0.5
+        self._section_change = 0.0
         self._bands = {name: BandState() for name in band_config.all_band_names}
         self._bpm = 0.0
         self._effective_bpm = 120.0
@@ -160,6 +161,7 @@ class AudioProcessor:
                 self._centroid_rms = self._energy.centroid_rms
                 self._centroid_harmonic_rms = self._energy.harmonic_centroid_rms
                 self._percussiveness = self._energy.percussiveness
+                self._section_change = self._energy.section_change
                 self._bpm = self._tempo.bpm
                 self._effective_bpm = self._tempo.effective_bpm
                 self._tempo_confidence = self._tempo.confidence
@@ -214,6 +216,7 @@ class AudioProcessor:
             centroid_rms=self._centroid_rms,
             centroid_harmonic_rms=self._centroid_harmonic_rms,
             percussiveness=self._percussiveness,
+            section_change=self._section_change,
             bpm=self._bpm,
             effective_bpm=self._effective_bpm,
             tempo_confidence=self._tempo_confidence,
