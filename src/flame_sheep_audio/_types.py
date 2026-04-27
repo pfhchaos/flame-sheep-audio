@@ -83,6 +83,7 @@ class AudioSnapshot:
 
     # Global
     percussiveness: float = 0.5
+    zcr_variance: float = 0.0
     bpm: float = 0.0
     effective_bpm: float = 120.0
     tempo_confidence: float = 0.0

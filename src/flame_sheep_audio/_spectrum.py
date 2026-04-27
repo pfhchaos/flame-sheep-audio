@@ -19,6 +19,7 @@ class SpectrumFrame:
     flux: np.ndarray         # (N_BINS,) float32, half-wave rectified spectral flux
     waveform: np.ndarray     # (FFT_SIZE,) float32, raw PCM window
     onset_strength: float = 0.0  # A-weighted flux sum — scalar for tempo tracking
+    zcr: float = 0.0             # zero-crossing rate (crossings per sample, speech/music discriminator)
 
 
 class SpectrumEngine:
@@ -53,11 +54,16 @@ class SpectrumEngine:
 
         self._prev_spectrum = magnitude.copy()
 
+        # Zero-crossing rate: fraction of adjacent samples with sign change
+        signs = np.signbit(pcm)
+        zcr = float(np.count_nonzero(signs[1:] != signs[:-1])) / len(pcm)
+
         return SpectrumFrame(
             magnitude=magnitude,
             flux=flux,
             waveform=pcm.copy(),
             onset_strength=float(np.dot(flux, _A_WEIGHTS)),
+            zcr=zcr,
         )
 
     def push_hop(self, hop: np.ndarray) -> SpectrumFrame:
