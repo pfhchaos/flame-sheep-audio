@@ -56,6 +56,7 @@ class AudioState:
     percussiveness: float = 0.5
     bpm: float = 0.0
     effective_bpm: float = 120.0     # blended with default based on confidence
+    tempo_confidence: float = 0.0    # ACF tempo tracker confidence (0..1)
     tempo_saturated: bool = False    # True when onset rate exceeds tracking range
     break_intensity: float = 0.0     # 0=normal, 1=deep break
 
@@ -84,4 +85,5 @@ class AudioSnapshot:
     percussiveness: float = 0.5
     bpm: float = 0.0
     effective_bpm: float = 120.0
+    tempo_confidence: float = 0.0
     tempo_saturated: bool = False

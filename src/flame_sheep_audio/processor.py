@@ -74,6 +74,7 @@ class AudioProcessor:
         self._bands = {name: BandState() for name in band_config.all_band_names}
         self._bpm = 0.0
         self._effective_bpm = 120.0
+        self._tempo_confidence = 0.0
         self._tempo_saturated = False
         self._pending_events: list[BeatEvent] = []
 
@@ -161,6 +162,7 @@ class AudioProcessor:
                 self._percussiveness = self._energy.percussiveness
                 self._bpm = self._tempo.bpm
                 self._effective_bpm = self._tempo.effective_bpm
+                self._tempo_confidence = self._tempo.confidence
                 self._tempo_saturated = self._tempo.saturated
                 # Build per-band state
                 band_rms = self._energy.band_rms_all
@@ -214,6 +216,7 @@ class AudioProcessor:
             percussiveness=self._percussiveness,
             bpm=self._bpm,
             effective_bpm=self._effective_bpm,
+            tempo_confidence=self._tempo_confidence,
             tempo_saturated=self._tempo_saturated,
         )
 
