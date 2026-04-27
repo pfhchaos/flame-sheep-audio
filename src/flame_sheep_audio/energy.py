@@ -40,11 +40,13 @@ class EnergyAnalyzer:
         self._centroid_rms = 0.0
         self._centroid_alpha = cfg.energy.centroid_alpha
 
-        # Section change detection: dual-EMA on centroid
-        self._centroid_fast = 1000.0  # ~2s half-life
-        self._centroid_slow = 1000.0  # ~15s half-life
-        self._CENTROID_FAST_ALPHA = 0.995   # ~2s at HOP cadence
-        self._CENTROID_SLOW_ALPHA = 0.9993  # ~15s at HOP cadence
+        # Section change detection: dual-EMA on centroid AND energy
+        self._centroid_fast = 1000.0
+        self._centroid_slow = 1000.0
+        self._energy_fast = 0.0
+        self._energy_slow = 0.0
+        self._SECTION_FAST_ALPHA = 0.995    # ~2s at HOP cadence
+        self._SECTION_SLOW_ALPHA = 0.9993   # ~15s at HOP cadence
 
         # Percussiveness tracking
         self._percussiveness = 0.5
@@ -96,11 +98,15 @@ class EnergyAnalyzer:
             self._centroid = (self._centroid_alpha * self._centroid
                               + (1 - self._centroid_alpha) * raw_centroid)
 
-            # Section change dual-EMA
-            fa = self._CENTROID_FAST_ALPHA
-            sa = self._CENTROID_SLOW_ALPHA
+            # Section change dual-EMAs (centroid + energy)
+            fa = self._SECTION_FAST_ALPHA
+            sa = self._SECTION_SLOW_ALPHA
             self._centroid_fast = fa * self._centroid_fast + (1 - fa) * self._centroid
             self._centroid_slow = sa * self._centroid_slow + (1 - sa) * self._centroid
+            # Track broadband onset strength for energy-based section changes
+            oss = float(np.dot(spectrum, A_WEIGHTS))
+            self._energy_fast = fa * self._energy_fast + (1 - fa) * oss
+            self._energy_slow = sa * self._energy_slow + (1 - sa) * oss
 
             # RMS around centroid (±1 octave)
             lo_c = self._centroid / 2
@@ -161,16 +167,24 @@ class EnergyAnalyzer:
 
     @property
     def section_change(self) -> float:
-        """Section change signal: divergence between fast and slow centroid EMAs.
+        """Section change signal: euclidean distance in (centroid, energy) space.
 
-        Normalized by the slow EMA so the value is scale-independent.
-        Near 0 = stable section, large positive = brighter section change,
-        large negative = darker section change. Absolute value > ~0.3
-        typically indicates a meaningful section boundary.
+        Uses dual-EMA (fast ~2s, slow ~15s) on both spectral centroid
+        and broadband energy. Returns the normalized distance between
+        fast and slow positions. Catches spectral shifts (verse→chorus),
+        dynamic shifts (quiet→loud), and combined changes.
+
+        Near 0 = stable section, > ~0.3 = section boundary.
         """
+        centroid_div = 0.0
         if self._centroid_slow > 0:
-            return (self._centroid_fast - self._centroid_slow) / self._centroid_slow
-        return 0.0
+            centroid_div = ((self._centroid_fast - self._centroid_slow)
+                            / self._centroid_slow)
+        energy_div = 0.0
+        if self._energy_slow > 1e-10:
+            energy_div = ((self._energy_fast - self._energy_slow)
+                          / self._energy_slow)
+        return float(np.sqrt(centroid_div ** 2 + energy_div ** 2))
 
     @property
     def centroid_rms(self) -> float:
