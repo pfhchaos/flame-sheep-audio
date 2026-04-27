@@ -139,8 +139,9 @@ class AudioProcessor:
                                 stability=self._stability)
             events = self._detector.detect(frame)
 
-            # Feed ACF tempo tracker with onset strength
-            self._tempo.feed(frame.onset_strength)
+            # Feed ACF tempo tracker with onset strength + total density
+            total_density = sum(self._density.densities.values())
+            self._tempo.feed(frame.onset_strength, onset_density=total_density)
 
             # Feed density tracker
             for event in events:
@@ -237,7 +238,8 @@ class AudioProcessor:
         events = self._detector.detect(frame)
 
         # Feed ACF tempo tracker
-        self._tempo.feed(frame.onset_strength)
+        total_density = sum(self._density.densities.values())
+        self._tempo.feed(frame.onset_strength, onset_density=total_density)
 
         # Feed density tracker
         now = time.perf_counter()

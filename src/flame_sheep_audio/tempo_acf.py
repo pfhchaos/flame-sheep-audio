@@ -101,11 +101,15 @@ class AutocorrelationTempoTracker:
         self._BPM_FAST_ALPHA = 0.3   # fast EMA: ~1 ACF update to converge
         self._BPM_SLOW_ALPHA = 0.85  # slow EMA: ~6 ACF updates (~3s)
 
+        # Onset density (updated each frame, used for octave disambiguation)
+        self._onset_density = 0.0
+
         # External hint
         self._hint_bpm: float | None = None
 
-    def feed(self, onset_strength: float):
-        """Feed one frame of onset strength (scalar, e.g. summed flux)."""
+    def feed(self, onset_strength: float, onset_density: float = 0.0):
+        """Feed one frame of onset strength and total onset density."""
+        self._onset_density = onset_density
         self._buffer[self._write_pos] = onset_strength
         self._write_pos = (self._write_pos + 1) % self._buffer_size
         self._frames_fed += 1
@@ -157,6 +161,21 @@ class AutocorrelationTempoTracker:
         peak_idx = np.argmax(weighted)
         peak_val = weighted[peak_idx]
         raw_bpm = float(self._lag_bpms[peak_idx])
+
+        # Octave disambiguation: if onset density is high relative to the
+        # detected BPM, prefer the faster octave. At 87 BPM you'd expect
+        # ~6 onsets/s with a full kit; density >> 6 suggests 174 BPM.
+        # Threshold: onsets/s that would be expected at the detected BPM
+        # with a typical kit (~3-4 instruments hitting per beat).
+        half_lag_idx = self._lags[peak_idx] // 2 - self._min_lag
+        expected_density = raw_bpm / 60.0 * 3.5  # ~3.5 onsets per beat
+        if (0 <= half_lag_idx < len(weighted)
+                and self._onset_density > expected_density * 1.5):
+            half_peak = weighted[half_lag_idx]
+            if half_peak > peak_val * 0.3:
+                peak_idx = half_lag_idx
+                peak_val = half_peak
+                raw_bpm = float(self._lag_bpms[peak_idx])
 
         # Confidence from peak prominence relative to the ACF floor
         # Use the raw (unweighted) ACF peak value — it's already normalized
