@@ -18,6 +18,8 @@ References:
   - Scheirer 1998, "Tempo and Beat Analysis of Acoustic Musical Signals"
 """
 
+from __future__ import annotations
+
 import numpy as np
 from collections import deque
 
@@ -107,7 +109,7 @@ class AutocorrelationTempoTracker:
         # External hint
         self._hint_bpm: float | None = None
 
-    def feed(self, onset_strength: float, onset_density: float = 0.0):
+    def feed(self, onset_strength: float, onset_density: float = 0.0) -> None:
         """Feed one frame of onset strength and total onset density."""
         self._onset_density = onset_density
         self._buffer[self._write_pos] = onset_strength
@@ -120,7 +122,7 @@ class AutocorrelationTempoTracker:
             if self._frames_fed >= self._buffer_size // 2:
                 self._update()
 
-    def _update(self):
+    def _update(self) -> None:
         """Recompute tempo estimate from autocorrelation."""
         # Unroll ring buffer into contiguous array
         buf = np.roll(self._buffer, -self._write_pos)
@@ -249,7 +251,7 @@ class AutocorrelationTempoTracker:
             self._bpm_fast_ema = fa * self._bpm_fast_ema + (1 - fa) * self._bpm
             self._bpm_slow_ema = sa * self._bpm_slow_ema + (1 - sa) * self._bpm
 
-    def hint_tempo(self, bpm: float):
+    def hint_tempo(self, bpm: float) -> None:
         """Provide external tempo hint."""
         if MIN_BPM <= bpm <= MAX_BPM:
             self._hint_bpm = bpm
@@ -261,11 +263,11 @@ class AutocorrelationTempoTracker:
             self._bpm_fast_ema = bpm
             self._bpm_slow_ema = bpm
 
-    def song_started(self):
+    def song_started(self) -> None:
         """Reset for new song."""
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
         """Clear all state."""
         self._buffer[:] = 0
         self._write_pos = 0

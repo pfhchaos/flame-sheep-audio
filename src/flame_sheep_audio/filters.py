@@ -10,6 +10,8 @@ Usage:
             handle_event(event)
 """
 
+from __future__ import annotations
+
 from ._types import BeatEvent
 
 
@@ -19,6 +21,6 @@ class OnsetFilter:
     def accept(self, event: BeatEvent, timestamp: float) -> bool:
         return True
 
-    def reset(self):
+    def reset(self) -> None:
         """Clear state — call on song change."""
         pass

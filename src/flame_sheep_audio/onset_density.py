@@ -9,6 +9,8 @@ Also provides per-band density_delta — the accelerando signal.
 Positive = speeding up, negative = slowing down.
 """
 
+from __future__ import annotations
+
 from collections import deque
 
 from .config import cfg
@@ -23,13 +25,13 @@ class OnsetDensityTracker:
     """
 
     @property
-    def WINDOW(self): return cfg.density.window
+    def WINDOW(self) -> float: return cfg.density.window
     @property
-    def DELTA_WINDOW(self): return cfg.density.delta_window
+    def DELTA_WINDOW(self) -> float: return cfg.density.delta_window
     @property
-    def ALPHA(self): return cfg.density.alpha
+    def ALPHA(self) -> float: return cfg.density.alpha
 
-    def __init__(self, band_config: BandConfig | None = None):
+    def __init__(self, band_config: BandConfig | None = None) -> None:
         if band_config is None:
             band_config = default_band_config()
         self._band_names = band_config.detection_band_names
@@ -40,19 +42,19 @@ class OnsetDensityTracker:
             b: deque() for b in self._band_names
         }
 
-    def reset(self):
+    def reset(self) -> None:
         """Clear all state — call on song change."""
         for b in self._band_names:
             self._times[b].clear()
             self._density[b] = 0.0
             self._delta_history[b].clear()
 
-    def process_onset(self, kind: str, timestamp: float):
+    def process_onset(self, kind: str, timestamp: float) -> None:
         """Record an onset event."""
         if kind in self._times:
             self._times[kind].append(timestamp)
 
-    def update(self, now: float):
+    def update(self, now: float) -> None:
         """Recompute densities. Call once per audio frame."""
         cutoff = now - self.WINDOW
         for band in self._band_names:

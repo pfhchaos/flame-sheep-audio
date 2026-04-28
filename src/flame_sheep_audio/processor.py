@@ -6,12 +6,15 @@ onset density tracking, and tempo estimation. Runs in a daemon thread
 (PipeWireSource) or synchronously (FeedSource for tests).
 """
 
+from __future__ import annotations
+
 import logging
 
 log = logging.getLogger(__name__)
 
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -21,7 +24,7 @@ from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
 from ._spectrum import SpectrumEngine
 from .beat_detector import FluxBeatDetector
 from .energy import EnergyAnalyzer
-from .source import PipeWireSource, FeedSource
+from .source import PipeWireSource, FeedSource, SignalSource
 from .onset_density import OnsetDensityTracker
 from .stability import MagnitudeStability
 from .tempo_acf import AutocorrelationTempoTracker
@@ -43,7 +46,7 @@ class AudioProcessor:
     """
 
     def __init__(self, device: str | int | None = None, adaptive: bool = False,
-                 sharpness: bool = True, source=None,
+                 sharpness: bool = True, source: SignalSource | None = None,
                  band_config: BandConfig | None = None):
         if band_config is None:
             band_config = default_band_config()
@@ -95,11 +98,11 @@ class AudioProcessor:
         self._thread: threading.Thread | None = None
         self._running = False
 
-    def reset_bands(self):
+    def reset_bands(self) -> None:
         """Reset adaptive bands to defaults. Call on song change."""
         self._detector.reset_bands()
 
-    def song_started(self):
+    def song_started(self) -> None:
         """Signal new song — reset tempo, density, mode, drop detectors."""
         self._tempo.song_started()
         self._density.reset()
@@ -109,18 +112,18 @@ class AudioProcessor:
         self._drop_detector.reset()
         self._bass_drop_detector.reset()
 
-    def hint_tempo(self, bpm: float):
+    def hint_tempo(self, bpm: float) -> None:
         """Provide tempo hint from external source."""
         self._tempo.hint_tempo(bpm)
 
-    def reset_tempo(self):
+    def reset_tempo(self) -> None:
         """Reset tempo + density + drop state (e.g., on seek)."""
         self._tempo.reset()
         self._density.reset()
         self._drop_detector.reset()
         self._bass_drop_detector.reset()
 
-    def start(self):
+    def start(self) -> None:
         self._source.start()
         if self._threaded:
             self._running = True
@@ -130,14 +133,14 @@ class AudioProcessor:
             log.info('Audio thread started (hop=%d, %.1fms)', HOP_SIZE,
                      HOP_SIZE / SAMPLE_RATE * 1000)
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         self._source.stop()  # unblocks read_hop via stop_event
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
 
-    def feed(self, pcm: np.ndarray):
+    def feed(self, pcm: np.ndarray) -> None:
         """Feed PCM samples into the source buffer."""
         self._source.feed(pcm)
 
@@ -145,7 +148,7 @@ class AudioProcessor:
     # Threaded mode: audio loop + drain
     # ------------------------------------------------------------------
 
-    def _audio_loop(self):
+    def _audio_loop(self) -> None:
         """Runs in daemon thread. Reads hops, analyses, publishes."""
         detection_names = set(self._band_config.detection_band_names)
         while self._running:
@@ -406,7 +409,7 @@ class SyntheticAudioProcessor:
         snare_interval: float = 1.0,
         hihat_interval: float = 0.25,
         bpm_label:      str   = '120 bpm',
-        clock=None,
+        clock: Callable[[], float] | None = None,
         band_config: BandConfig | None = None,
     ):
         if band_config is None:
@@ -424,7 +427,7 @@ class SyntheticAudioProcessor:
         self._spectrum = np.zeros(N_BINS, dtype=np.float32)
         self._rms      = 0.5  # synthetic audio is "always playing"
 
-    def start(self):
+    def start(self) -> None:
         if self._clock is not None:
             self._start_time = self._clock()
         else:
@@ -435,19 +438,19 @@ class SyntheticAudioProcessor:
               f'snare={self.snare_interval:.2f}s  '
               f'hihat={self.hihat_interval:.2f}s')
 
-    def stop(self):
+    def stop(self) -> None:
         pass  # nothing to close
 
-    def reset_bands(self):
+    def reset_bands(self) -> None:
         pass
 
-    def song_started(self):
+    def song_started(self) -> None:
         pass
 
-    def hint_tempo(self, bpm: float):
+    def hint_tempo(self, bpm: float) -> None:
         pass
 
-    def reset_tempo(self):
+    def reset_tempo(self) -> None:
         pass
 
     def process(self) -> list[BeatEvent]:
@@ -510,7 +513,7 @@ class SyntheticAudioProcessor:
         return self._rms
 
 
-def list_monitor_devices() -> list[dict]:
+def list_monitor_devices() -> list[dict[str, object]]:
     """Helper: list available input devices, highlighting monitor sinks."""
     devices = []
     for i, d in enumerate(sd.query_devices()):

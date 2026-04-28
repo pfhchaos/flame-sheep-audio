@@ -1,8 +1,14 @@
 """Shared types for audio analysis."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ._band_config import BandConfig
 
 
 @dataclass
@@ -27,7 +33,7 @@ class BandState:
     density_delta: float = 0.0      # first derivative of onset density
 
 
-def _default_bands(band_config=None) -> dict[str, BandState]:
+def _default_bands(band_config: BandConfig | None = None) -> dict[str, BandState]:
     if band_config is not None:
         return {name: BandState() for name in band_config.all_band_names}
     from ._band_config import default_band_config

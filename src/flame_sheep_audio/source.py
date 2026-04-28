@@ -4,6 +4,8 @@ PipeWireSource: real audio from sounddevice/PipeWire.
 FeedSource: manual PCM injection for testing.
 """
 
+from __future__ import annotations
+
 import threading
 import numpy as np
 from collections import deque
@@ -36,7 +38,7 @@ class SignalSource(Protocol):
 class PipeWireSource:
     """Real audio capture via sounddevice (PipeWire/PulseAudio/ALSA)."""
 
-    def __init__(self, device: str | int | None = None):
+    def __init__(self, device: str | int | None = None) -> None:
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._stop_event = threading.Event()
@@ -52,16 +54,16 @@ class PipeWireSource:
             callback=self._callback,
         )
 
-    def _callback(self, indata: np.ndarray, frames: int, time, status):
+    def _callback(self, indata: np.ndarray, frames: int, time: object, status: object) -> None:
         with self._cond:
             self._buffer.extend(indata[:, 0])
             self._new_samples += frames
             self._cond.notify_all()
 
-    def start(self):
+    def start(self) -> None:
         self._stream.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop_event.set()
         with self._cond:
             self._cond.notify_all()  # unblock any waiting read_hop
@@ -97,7 +99,7 @@ class PipeWireSource:
             self._new_samples -= n
             return samples
 
-    def feed(self, pcm: np.ndarray):
+    def feed(self, pcm: np.ndarray) -> None:
         """Push PCM samples directly (bypass sounddevice)."""
         with self._cond:
             self._buffer.extend(pcm)
@@ -108,13 +110,13 @@ class PipeWireSource:
 class FeedSource:
     """Test signal source — accepts PCM via feed(), no audio hardware."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._buffer = deque(maxlen=SAMPLE_RATE // 2)
-        self._new_samples = 0
+        self._buffer: deque[float] = deque(maxlen=SAMPLE_RATE // 2)
+        self._new_samples: int = 0
 
-    def start(self): pass
-    def stop(self): pass
+    def start(self) -> None: pass
+    def stop(self) -> None: pass
 
     def read(self) -> np.ndarray | None:
         with self._lock:
@@ -134,7 +136,7 @@ class FeedSource:
             self._new_samples -= n
             return samples
 
-    def feed(self, pcm: np.ndarray):
+    def feed(self, pcm: np.ndarray) -> None:
         with self._lock:
             self._buffer.extend(pcm)
             self._new_samples += len(pcm)

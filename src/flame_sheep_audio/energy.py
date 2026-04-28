@@ -1,6 +1,12 @@
 """Energy analyzer — sub-bass RMS, spectral centroid, percussiveness."""
 
+from __future__ import annotations
+
 import numpy as np
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .stability import MagnitudeStability
 
 from ._constants import N_BINS, FREQS, SAMPLE_RATE
 from ._bands import make_mask, A_WEIGHTS
@@ -18,7 +24,8 @@ class EnergyAnalyzer:
       - percussiveness: flux/magnitude ratio — drums vs sustain
     """
 
-    def __init__(self, alpha: float = None, band_config: BandConfig | None = None):
+    def __init__(self, alpha: float | None = None,
+                 band_config: BandConfig | None = None) -> None:
         self._alpha = alpha if alpha is not None else cfg.energy.rms_alpha
         if band_config is None:
             band_config = default_band_config()
@@ -57,7 +64,7 @@ class EnergyAnalyzer:
         self._harmonic_centroid_rms = 0.0
 
     def update(self, spectrum: np.ndarray, flux: np.ndarray | None = None,
-               stability=None) -> float:
+               stability: MagnitudeStability | None = None) -> float:
         """Update all features from spectrum magnitude and flux.
 
         Args:

@@ -8,6 +8,8 @@ The visualization declares what bands it needs at AudioProcessor construction
 time. The engine doesn't care what they're for.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import cached_property
 

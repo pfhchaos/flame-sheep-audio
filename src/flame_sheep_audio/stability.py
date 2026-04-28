@@ -13,6 +13,8 @@ This is a lightweight alternative to full HPSS — no spectrogram
 buffering, O(N_BINS) per frame, zero latency.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
 from ._constants import N_BINS
@@ -22,12 +24,12 @@ from .config import cfg
 class _StabilityEMA:
     """Single-timescale per-bin EMA variance tracker."""
 
-    def __init__(self, alpha: float):
+    def __init__(self, alpha: float) -> None:
         self._alpha = alpha
         self._mag_ema = np.zeros(N_BINS, dtype=np.float32)
         self._mag_var = np.zeros(N_BINS, dtype=np.float32)
 
-    def update(self, magnitude: np.ndarray):
+    def update(self, magnitude: np.ndarray) -> None:
         diff = magnitude - self._mag_ema
         self._mag_ema = self._alpha * self._mag_ema + (1 - self._alpha) * magnitude
         self._mag_var = self._alpha * self._mag_var + (1 - self._alpha) * diff * diff
@@ -57,7 +59,7 @@ class _StabilityEMA:
         band = weighted[mask]
         return float(np.sqrt(np.mean(band ** 2)))
 
-    def reset(self):
+    def reset(self) -> None:
         self._mag_ema[:] = 0.0
         self._mag_var[:] = 0.0
 
@@ -73,7 +75,7 @@ class MagnitudeStability:
     period. Useful for section change detection and mode blending.
     """
 
-    def __init__(self, fast_alpha: float = None, slow_alpha: float = None):
+    def __init__(self, fast_alpha: float | None = None, slow_alpha: float | None = None) -> None:
         if fast_alpha is None:
             fast_alpha = cfg.stability.fast_alpha
         if slow_alpha is None:
@@ -81,7 +83,7 @@ class MagnitudeStability:
         self._fast = _StabilityEMA(fast_alpha)
         self._slow = _StabilityEMA(slow_alpha)
 
-    def update(self, magnitude: np.ndarray):
+    def update(self, magnitude: np.ndarray) -> None:
         self._fast.update(magnitude)
         self._slow.update(magnitude)
 
@@ -97,6 +99,6 @@ class MagnitudeStability:
         """Harmonic RMS using fast stability weighting."""
         return self._fast.harmonic_rms(magnitude, mask)
 
-    def reset(self):
+    def reset(self) -> None:
         self._fast.reset()
         self._slow.reset()

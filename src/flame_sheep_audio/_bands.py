@@ -1,5 +1,7 @@
 """Adaptive spectral band definitions and utilities."""
 
+from __future__ import annotations
+
 import numpy as np
 from ._constants import N_BINS, FREQS
 
@@ -68,7 +70,7 @@ class SpringBand:
 
     def __init__(self, name: str,
                  default_range: tuple[float, float],
-                 allowed_range: tuple[float, float]):
+                 allowed_range: tuple[float, float]) -> None:
         self.name = name
         lo_a, hi_a = allowed_range
         lo_d, hi_d = default_range
@@ -82,7 +84,7 @@ class SpringBand:
         self._flux_ema = np.zeros(N_BINS, dtype=np.float32)
 
     def update_flux_ema(self, flux: np.ndarray, stability: np.ndarray,
-                        alpha: float = 0.95):
+                        alpha: float = 0.95) -> None:
         """Accumulate stability-weighted flux (percussive energy only)."""
         # Weight flux by (1-stability) so transient bins dominate
         percussive_flux = flux * (1.0 - stability)
@@ -97,7 +99,7 @@ class SpringBand:
         return float(np.dot(FREQS, self._flux_ema) / total)
 
     def apply_forces(self, anchor_k: float, flux_k: float,
-                     neighbors: list['SpringBand'], repulsion_k: float):
+                     neighbors: list[SpringBand], repulsion_k: float) -> None:
         """Update center position from spring forces."""
         f_anchor = anchor_k * (self.default_center - self.center)
         target = self.flux_centroid()
@@ -120,7 +122,7 @@ class SpringBand:
         """Float mask for allowed frequency range."""
         return ((FREQS >= self.lo_allowed) & (FREQS < self.hi_allowed)).astype(np.float32)
 
-    def reset(self):
+    def reset(self) -> None:
         self.center = self.default_center
         self.width = self.default_width
         self.mask = make_mask(self.default_center - self.default_width,
@@ -136,7 +138,7 @@ class AdaptiveBand:
 
     def __init__(self, name: str,
                  default_range: tuple[float, float],
-                 allowed_range: tuple[float, float]):
+                 allowed_range: tuple[float, float]) -> None:
         self.name = name
         lo_a, hi_a = allowed_range
         lo_d, hi_d = default_range
@@ -145,6 +147,6 @@ class AdaptiveBand:
         self.weights         = self.default_weights.copy()
         self.flux_accum      = np.zeros(N_BINS, dtype=np.float32)
 
-    def reset(self):
+    def reset(self) -> None:
         self.weights = self.default_weights.copy()
         self.flux_accum[:] = 0.0

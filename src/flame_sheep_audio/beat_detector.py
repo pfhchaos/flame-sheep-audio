@@ -1,7 +1,13 @@
 """Spectral flux beat detector — onset detection from FFT magnitude changes."""
 
+from __future__ import annotations
+
 import numpy as np
 from collections import deque
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .stability import MagnitudeStability
 
 from ._constants import N_BINS, HISTORY_LEN, FFT_SIZE, HOP_SIZE
 from .config import cfg
@@ -35,22 +41,23 @@ class FluxBeatDetector:
 
     # Configurable constants read from cfg at access time
     @property
-    def THRESHOLD(self): return cfg.detection.base_threshold
+    def THRESHOLD(self) -> float: return cfg.detection.base_threshold
     @property
-    def KICK_THRESHOLD(self): return cfg.detection.kick_threshold
+    def KICK_THRESHOLD(self) -> float: return cfg.detection.kick_threshold
     @property
-    def COOLDOWN(self): return cfg.detection.cooldown_frames
+    def COOLDOWN(self) -> int: return cfg.detection.cooldown_frames
     @property
-    def KICK_COOLDOWN(self): return cfg.detection.kick_cooldown_frames
+    def KICK_COOLDOWN(self) -> int: return cfg.detection.kick_cooldown_frames
     @property
-    def STABILITY_SCALING(self): return cfg.detection.stability_scaling
+    def STABILITY_SCALING(self) -> float: return cfg.detection.stability_scaling
     @property
-    def MIN_FLUX(self): return cfg.detection.min_flux
+    def MIN_FLUX(self) -> float: return cfg.detection.min_flux
     @property
-    def SHARPNESS(self): return cfg.detection.sharpness
+    def SHARPNESS(self) -> float: return cfg.detection.sharpness
 
     def __init__(self, adaptive: bool = False, sharpness: bool = True,
-                 stability=None, band_config: BandConfig | None = None):
+                 stability: MagnitudeStability | None = None,
+                 band_config: BandConfig | None = None) -> None:
         self._adaptive = adaptive
         self._spring_bands_enabled = cfg.adaptive.enabled
         self._sharpness = sharpness
@@ -103,11 +110,11 @@ class FluxBeatDetector:
         }
 
     @property
-    def adaptive_bands(self):
+    def adaptive_bands(self) -> dict[str, AdaptiveBand] | None:
         """Access adaptive band state (for tests/inspection)."""
         return self._adaptive_bands if self._adaptive else None
 
-    def reset_bands(self):
+    def reset_bands(self) -> None:
         """Reset adaptive bands to defaults. Call on song change."""
         if self._adaptive:
             for ab in self._adaptive_bands.values():
@@ -197,7 +204,7 @@ class FluxBeatDetector:
             mask = self._bands[band]
             return float(flux[mask].mean()) if mask.any() else 0.0
 
-    def _update_spring_bands(self, flux: np.ndarray):
+    def _update_spring_bands(self, flux: np.ndarray) -> None:
         """Update spring band positions from stability-weighted flux."""
         self._spring_frame += 1
         if self._spring_frame < cfg.adaptive.update_interval:
@@ -233,7 +240,7 @@ class FluxBeatDetector:
         for name in band_order:
             self._bands[name] = self._spring_bands[name].mask
 
-    def _update_adaptive_bands(self, flux: np.ndarray):
+    def _update_adaptive_bands(self, flux: np.ndarray) -> None:
         """EMA update of per-bin flux accumulators + periodic weight recompute."""
         alpha = self._adapt_alpha
 

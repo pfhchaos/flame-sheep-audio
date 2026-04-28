@@ -5,6 +5,8 @@ Re-exports public symbols so existing imports like
 `from flame_sheep.audio import AudioProcessor, BeatEvent` continue to work.
 """
 
+from __future__ import annotations
+
 # Constants
 from ._constants import (
     SAMPLE_RATE, DEFAULT_DEVICE, FFT_SIZE, HOP_SIZE, N_BINS, HISTORY_LEN, FREQS,

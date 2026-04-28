@@ -1,5 +1,7 @@
 """Spectrum computation engine — FFT, windowing, spectral flux."""
 
+from __future__ import annotations
+
 import numpy as np
 from dataclasses import dataclass
 from scipy.signal import windows
@@ -30,7 +32,7 @@ class SpectrumEngine:
     so the FFT is only computed once.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._window = windows.hann(FFT_SIZE, sym=False).astype(np.float32)
         self._prev_spectrum: np.ndarray | None = None
         self._buffer = np.zeros(FFT_SIZE, dtype=np.float32)  # sliding window for push_hop
@@ -77,7 +79,7 @@ class SpectrumEngine:
         self._buffer[FFT_SIZE - n:] = hop
         return self.compute(self._buffer)
 
-    def reset(self):
+    def reset(self) -> None:
         """Clear previous spectrum state."""
         self._prev_spectrum = None
         self._buffer[:] = 0.0

@@ -13,6 +13,8 @@ Detection requires:
   - Cooldown period after a break ends
 """
 
+from __future__ import annotations
+
 import logging
 
 from ._types import BeatEvent
@@ -28,15 +30,15 @@ class DropDetector:
     """
 
     @property
-    def QUIET_THRESHOLD_FRAMES(self): return cfg.breaks.quiet_threshold_frames
+    def QUIET_THRESHOLD_FRAMES(self) -> int: return cfg.breaks.quiet_threshold_frames
     @property
-    def MIN_KICKS_BEFORE_DROP(self): return cfg.breaks.min_kicks_before_break
+    def MIN_KICKS_BEFORE_DROP(self) -> int: return cfg.breaks.min_kicks_before_break
     @property
-    def BREAK_COOLDOWN(self): return cfg.breaks.cooldown_seconds
+    def BREAK_COOLDOWN(self) -> float: return cfg.breaks.cooldown_seconds
     @property
-    def DROP_ENERGY_RATIO(self): return cfg.breaks.drop_energy_ratio
+    def DROP_ENERGY_RATIO(self) -> float: return cfg.breaks.drop_energy_ratio
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._quiet_frames = 0
         self._total_kicks = 0
         self._cooldown = 0.0
@@ -45,7 +47,7 @@ class DropDetector:
         self.breaking = False
         self._break_start_frame = 0
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset state — call on song change."""
         self._quiet_frames = 0
         self._total_kicks = 0

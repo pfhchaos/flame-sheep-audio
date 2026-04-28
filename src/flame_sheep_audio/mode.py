@@ -14,6 +14,8 @@ discriminator and broadband RMS for silence detection. Transitions
 have asymmetric timing: fast entry to beat mode, slow exit.
 """
 
+from __future__ import annotations
+
 import logging
 from enum import Enum
 
@@ -48,7 +50,7 @@ class ModeDetector:
     GenomeAxis. This class only decides which mode is active.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.mode = Mode.IDLE
         self._perc_ema = 0.0    # smoothed percussiveness (start low = unknown)
         self._perc_alpha = 0.95 # EMA smoothing for percussiveness
@@ -139,7 +141,7 @@ class ModeDetector:
 
         return self.mode
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset to idle — call on song change."""
         self.mode = Mode.IDLE
         self._perc_ema = 0.0

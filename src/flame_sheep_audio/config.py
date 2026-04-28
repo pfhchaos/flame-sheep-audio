@@ -10,10 +10,14 @@ Config is loaded from (in order):
 Call `cfg.reload()` to re-read from disk.
 """
 
+from __future__ import annotations
+
 import logging
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
+from collections.abc import Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -95,13 +99,13 @@ def _to_namespace(d: dict) -> SimpleNamespace:
 class Config:
     """Global configuration with dot-access and hot reload."""
 
-    def __init__(self):
-        self._data = dict(DEFAULTS)
-        self._ns = _to_namespace(self._data)
-        self._reload_callbacks: list = []
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = dict(DEFAULTS)
+        self._ns: SimpleNamespace = _to_namespace(self._data)
+        self._reload_callbacks: list[Callable[[], None]] = []
         self._load_user_config()
 
-    def _load_user_config(self):
+    def _load_user_config(self) -> None:
         if CONFIG_PATH.exists():
             try:
                 with open(CONFIG_PATH, 'rb') as f:
@@ -112,11 +116,11 @@ class Config:
             except Exception:
                 log.exception(f'Failed to load {CONFIG_PATH}, using defaults')
 
-    def on_reload(self, callback):
+    def on_reload(self, callback: Callable[[], None]) -> None:
         """Register a callback to be called after config is reloaded."""
         self._reload_callbacks.append(callback)
 
-    def reload(self):
+    def reload(self) -> None:
         """Re-read config from disk and notify listeners."""
         self._data = dict(DEFAULTS)
         self._ns = _to_namespace(self._data)
@@ -125,7 +129,7 @@ class Config:
         for cb in self._reload_callbacks:
             cb()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._ns, name)
 
 

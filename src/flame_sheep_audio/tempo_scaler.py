@@ -21,6 +21,8 @@ Usage:
     alpha = scaler.alpha_for_beats(effective_bpm, beats=2.0)
 """
 
+from __future__ import annotations
+
 import math
 
 from ._constants import HOP_SIZE, SAMPLE_RATE
@@ -41,7 +43,7 @@ class TempoScaler:
         return 1.0 / (1.0 + math.exp(-self.steepness * (bpm - self.midpoint)))
 
     def scale(self, bpm: float, slow_val: float, fast_val: float,
-              steepness: float = None) -> float:
+              steepness: float | None = None) -> float:
         """Blend between slow_val and fast_val based on tempo.
 
         Args:
