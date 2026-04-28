@@ -95,6 +95,10 @@ class MagnitudeStability:
         """Slow stability — section-level (for mode/character tracking)."""
         return self._slow.band_stability(mask)
 
+    def stability_per_bin(self) -> np.ndarray:
+        """Per-bin stability scores (fast timescale), 0..1. 1=harmonic."""
+        return self._fast.stability_per_bin()
+
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
         """Harmonic RMS using fast stability weighting."""
         return self._fast.harmonic_rms(magnitude, mask)

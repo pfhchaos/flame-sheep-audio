@@ -78,6 +78,7 @@ class AudioSnapshot:
     events: list[BeatEvent] = field(default_factory=list)
     spectrum: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
     waveform: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
+    stability: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))  # per-bin 0..1, 1=harmonic
 
     # Per-band metrics
     bands: dict[str, BandState] = field(default_factory=_default_bands)

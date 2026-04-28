@@ -78,6 +78,7 @@ class AudioProcessor:
         # Shared state (lock-protected, read by drain(), written by audio thread or process())
         self._lock     = threading.Lock()
         self._spectrum = np.zeros(N_BINS, dtype=np.float32)
+        self._stability_bins = np.zeros(N_BINS, dtype=np.float32)
         self._waveform = np.zeros(FFT_SIZE, dtype=np.float32)
         self._centroid = 1000.0
         self._centroid_delta = 0.0
@@ -177,6 +178,7 @@ class AudioProcessor:
             with self._lock:
                 self._pending_events.extend(events)
                 self._spectrum[:] = frame.magnitude
+                self._stability_bins[:] = self._stability.stability_per_bin()
                 self._waveform[:] = frame.waveform
                 self._centroid = self._energy.centroid
                 self._centroid_delta = self._energy.centroid_delta
@@ -264,6 +266,7 @@ class AudioProcessor:
         return AudioSnapshot(
             events=events,
             spectrum=self._spectrum.copy(),
+            stability=self._stability_bins.copy(),
             waveform=self._waveform.copy(),
             bands=bands,
             centroid=self._centroid,
@@ -314,6 +317,7 @@ class AudioProcessor:
 
         with self._lock:
             self._spectrum[:] = frame.magnitude
+            self._stability_bins[:] = self._stability.stability_per_bin()
             self._waveform[:] = frame.waveform
             self._centroid = self._energy.centroid
             self._centroid_delta = self._energy.centroid_delta
