@@ -89,3 +89,5 @@ class AudioSnapshot:
     effective_bpm: float = 120.0
     tempo_confidence: float = 0.0
     tempo_saturated: bool = False
+    mode: str = 'idle'               # 'idle' | 'energy' | 'beat'
+    break_intensity: float = 0.0     # 0=normal, 1=deep break

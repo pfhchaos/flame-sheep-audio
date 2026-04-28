@@ -27,5 +27,8 @@ from .energy import EnergyAnalyzer
 # Signal sources
 from .source import PipeWireSource, FeedSource
 
+# Mode detection
+from .mode import Mode, ModeDetector
+
 # Processor classes
 from .processor import AudioProcessor, SyntheticAudioProcessor, list_monitor_devices

@@ -17,7 +17,7 @@ import numpy as np
 import sounddevice as sd
 
 from ._constants import SAMPLE_RATE, FFT_SIZE, N_BINS, HOP_SIZE
-from ._types import BeatEvent, BandState, AudioSnapshot
+from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
 from ._spectrum import SpectrumEngine
 from .beat_detector import FluxBeatDetector
 from .energy import EnergyAnalyzer
@@ -26,6 +26,10 @@ from .onset_density import OnsetDensityTracker
 from .stability import MagnitudeStability
 from .tempo_acf import AutocorrelationTempoTracker
 from ._band_config import BandConfig, default_band_config
+from .mode import ModeDetector
+from .drop_detector import DropDetector
+from .bass_drop_detector import BassDropDetector
+from .config import cfg
 
 
 class AudioProcessor:
@@ -62,6 +66,12 @@ class AudioProcessor:
         frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
         self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
 
+        # Mode detection + break detectors (previously in visualization)
+        self._mode_detector = ModeDetector()
+        self._drop_detector = DropDetector()
+        self._bass_drop_detector = BassDropDetector()
+        self._frame_dt = frame_duration  # dt per analysis frame
+
         # Shared state (lock-protected, read by drain(), written by audio thread or process())
         self._lock     = threading.Lock()
         self._spectrum = np.zeros(N_BINS, dtype=np.float32)
@@ -77,6 +87,8 @@ class AudioProcessor:
         self._effective_bpm = 120.0
         self._tempo_confidence = 0.0
         self._tempo_saturated = False
+        self._mode = 'idle'
+        self._break_intensity = 0.0
         self._pending_events: list[BeatEvent] = []
 
         # Thread state
@@ -88,18 +100,25 @@ class AudioProcessor:
         self._detector.reset_bands()
 
     def song_started(self):
-        """Signal new song — reset tempo + density trackers."""
+        """Signal new song — reset tempo, density, mode, drop detectors."""
         self._tempo.song_started()
         self._density.reset()
+        self._mode_detector.reset()
+        from .mode import Mode
+        self._mode_detector.mode = Mode.ENERGY  # not idle — audio is playing
+        self._drop_detector.reset()
+        self._bass_drop_detector.reset()
 
     def hint_tempo(self, bpm: float):
         """Provide tempo hint from external source."""
         self._tempo.hint_tempo(bpm)
 
     def reset_tempo(self):
-        """Reset tempo + density state (e.g., on seek)."""
+        """Reset tempo + density + drop state (e.g., on seek)."""
         self._tempo.reset()
         self._density.reset()
+        self._drop_detector.reset()
+        self._bass_drop_detector.reset()
 
     def start(self):
         self._source.start()
@@ -183,6 +202,39 @@ class AudioProcessor:
                         density_delta=density_deltas.get(name, 0.0),
                     )
 
+                # Mode detection + break detectors
+                audio_state = AudioState(
+                    events=events,
+                    bands=dict(self._bands),
+                    centroid=self._centroid,
+                    centroid_delta=self._centroid_delta,
+                    centroid_rms=self._centroid_rms,
+                    centroid_harmonic_rms=self._centroid_harmonic_rms,
+                    percussiveness=self._percussiveness,
+                    section_change=self._section_change,
+                    bpm=self._bpm,
+                    effective_bpm=self._effective_bpm,
+                    tempo_confidence=self._tempo_confidence,
+                    tempo_saturated=self._tempo_saturated,
+                )
+                self._mode_detector.tick(audio_state)
+                is_idle = self._mode_detector.mode.value == 'idle'
+                self._mode = self._mode_detector.mode.value
+
+                if cfg.breaks.enabled:
+                    self._drop_detector.detect(
+                        events, self._centroid_rms,
+                        self._bpm, is_idle, self._frame_dt)
+                    subbass_rms = self._bands.get('subbass', BandState()).rms
+                    self._bass_drop_detector.detect(
+                        events, subbass_rms,
+                        self._bpm, is_idle, self._frame_dt)
+                    self._break_intensity = max(
+                        self._drop_detector.break_intensity,
+                        self._bass_drop_detector.break_intensity)
+                else:
+                    self._break_intensity = 0.0
+
     def drain(self) -> AudioSnapshot:
         """Atomically read and clear accumulated audio state.
 
@@ -221,6 +273,8 @@ class AudioProcessor:
             effective_bpm=self._effective_bpm,
             tempo_confidence=self._tempo_confidence,
             tempo_saturated=self._tempo_saturated,
+            mode=self._mode,
+            break_intensity=self._break_intensity,
         )
 
     # ------------------------------------------------------------------
@@ -263,6 +317,7 @@ class AudioProcessor:
             self._centroid_rms = self._energy.centroid_rms
             self._centroid_harmonic_rms = self._energy.harmonic_centroid_rms
             self._percussiveness = self._energy.percussiveness
+            self._section_change = self._energy.section_change
             band_rms = self._energy.band_rms_all
             band_hrms = self._energy.band_harmonic_rms_all
             band_slow = self._energy.band_slow_rms_all
@@ -278,6 +333,39 @@ class AudioProcessor:
                     onset_density=densities.get(name, 0.0),
                     density_delta=density_deltas.get(name, 0.0),
                 )
+
+            # Mode detection + break detectors
+            audio_state = AudioState(
+                events=events,
+                bands=dict(self._bands),
+                centroid=self._centroid,
+                centroid_delta=self._centroid_delta,
+                centroid_rms=self._centroid_rms,
+                centroid_harmonic_rms=self._centroid_harmonic_rms,
+                percussiveness=self._percussiveness,
+                section_change=self._section_change,
+                bpm=self._bpm,
+                effective_bpm=self._effective_bpm,
+                tempo_confidence=self._tempo_confidence,
+                tempo_saturated=self._tempo_saturated,
+            )
+            self._mode_detector.tick(audio_state)
+            is_idle = self._mode_detector.mode.value == 'idle'
+            self._mode = self._mode_detector.mode.value
+
+            if cfg.breaks.enabled:
+                self._drop_detector.detect(
+                    events, self._centroid_rms,
+                    self._bpm, is_idle, self._frame_dt)
+                subbass_rms = self._bands.get('subbass', BandState()).rms
+                self._bass_drop_detector.detect(
+                    events, subbass_rms,
+                    self._bpm, is_idle, self._frame_dt)
+                self._break_intensity = max(
+                    self._drop_detector.break_intensity,
+                    self._bass_drop_detector.break_intensity)
+            else:
+                self._break_intensity = 0.0
 
         return events
 
@@ -410,6 +498,7 @@ class SyntheticAudioProcessor:
             spectrum=self._spectrum.copy(),
             waveform=np.zeros(FFT_SIZE, dtype=np.float32),
             bands=bands,
+            mode='beat',  # synthetic audio simulates music
         )
 
     @property
