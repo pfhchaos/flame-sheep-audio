@@ -98,6 +98,7 @@ class Config:
     def __init__(self):
         self._data = dict(DEFAULTS)
         self._ns = _to_namespace(self._data)
+        self._reload_callbacks: list = []
         self._load_user_config()
 
     def _load_user_config(self):
@@ -111,12 +112,18 @@ class Config:
             except Exception:
                 log.exception(f'Failed to load {CONFIG_PATH}, using defaults')
 
+    def on_reload(self, callback):
+        """Register a callback to be called after config is reloaded."""
+        self._reload_callbacks.append(callback)
+
     def reload(self):
-        """Re-read config from disk."""
+        """Re-read config from disk and notify listeners."""
         self._data = dict(DEFAULTS)
         self._ns = _to_namespace(self._data)
         self._load_user_config()
         log.info('Audio config reloaded')
+        for cb in self._reload_callbacks:
+            cb()
 
     def __getattr__(self, name):
         return getattr(self._ns, name)
