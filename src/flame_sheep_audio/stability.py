@@ -43,12 +43,12 @@ class _StabilityEMA:
         if band_mag < 1e-10:
             return 1.0
         cv = float(np.sqrt(band_var) / (band_mag + 1e-10))
-        return max(0.0, min(1.0, 1.0 - cv))
+        return 1.0 / (1.0 + cv)
 
     def stability_per_bin(self) -> np.ndarray:
         """Per-bin stability scores, 0..1. 1=harmonic, 0=transient."""
         cv = np.sqrt(self._mag_var) / (self._mag_ema + 1e-10)
-        return np.clip(1.0 - cv, 0.0, 1.0).astype(np.float32)
+        return (1.0 / (1.0 + cv)).astype(np.float32)
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
         """RMS weighted by stability — only sustained content contributes."""
