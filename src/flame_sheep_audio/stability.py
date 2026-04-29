@@ -32,7 +32,8 @@ class _StabilityEMA:
     def update(self, magnitude: np.ndarray) -> None:
         diff = magnitude - self._mag_ema
         self._mag_ema = self._alpha * self._mag_ema + (1 - self._alpha) * magnitude
-        self._mag_var = self._alpha * self._mag_var + (1 - self._alpha) * diff * diff
+        diff2 = magnitude - self._mag_ema  # post-update residual (Welford)
+        self._mag_var = self._alpha * self._mag_var + (1 - self._alpha) * diff * diff2
 
     def band_stability(self, mask: np.ndarray) -> float:
         """0.0 = transient, 1.0 = stable/harmonic."""
