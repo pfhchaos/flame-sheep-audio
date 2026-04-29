@@ -48,6 +48,12 @@ DEFAULTS = {
         'slow_attack_alpha': 0.995,    # ~2s half-life at 93fps (HOP cadence)
         'slow_release_alpha': 0.98,    # ~0.5s half-life
     },
+    'section': {
+        'fast_alpha': 0.995,        # ~2s at HOP cadence
+        'slow_alpha': 0.9993,       # ~15s at HOP cadence
+        'weight_centroid': 1.0,     # tunable axis coefficient
+        'weight_energy': 1.0,       # tunable axis coefficient
+    },
     'density': {
         'window': 1.0,
         'delta_window': 2.0,

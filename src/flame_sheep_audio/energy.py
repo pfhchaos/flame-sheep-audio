@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .stability import MagnitudeStability
 
-from ._constants import N_BINS, FREQS, SAMPLE_RATE
+from ._constants import N_BINS, FFT_SIZE, FREQS, SAMPLE_RATE
 from ._bands import make_mask, A_WEIGHTS
 from ._band_config import BandConfig, default_band_config
 from .config import cfg
@@ -47,13 +47,19 @@ class EnergyAnalyzer:
         self._centroid_rms = 0.0
         self._centroid_alpha = cfg.energy.centroid_alpha
 
-        # Section change detection: dual-EMA on centroid AND energy
-        self._centroid_fast = 1000.0
-        self._centroid_slow = 1000.0
-        self._energy_fast = 0.0
-        self._energy_slow = 0.0
-        self._SECTION_FAST_ALPHA = 0.995    # ~2s at HOP cadence
-        self._SECTION_SLOW_ALPHA = 0.9993   # ~15s at HOP cadence
+        # Section change detection: dual-EMA on normalized centroid + energy
+        self._centroid_fast_norm = 0.5
+        self._centroid_slow_norm = 0.5
+        self._energy_fast_norm = 0.0
+        self._energy_slow_norm = 0.0
+        self._SECTION_FAST_ALPHA = cfg.section.fast_alpha
+        self._SECTION_SLOW_ALPHA = cfg.section.slow_alpha
+        self._SECTION_W_CENTROID = cfg.section.weight_centroid
+        self._SECTION_W_ENERGY = cfg.section.weight_energy
+        # Normalization constants
+        self._CENTROID_LOG_MIN = np.log2(20.0)
+        self._CENTROID_LOG_RANGE = np.log2(20000.0) - np.log2(20.0)  # ~10 octaves
+        self._ENERGY_REF = FFT_SIZE / 2.0
 
         # Percussiveness tracking
         self._percussiveness = 0.5
@@ -105,15 +111,18 @@ class EnergyAnalyzer:
             self._centroid = (self._centroid_alpha * self._centroid
                               + (1 - self._centroid_alpha) * raw_centroid)
 
-            # Section change dual-EMAs (centroid + energy)
+            # Section change dual-EMAs on normalized centroid + energy
             fa = self._SECTION_FAST_ALPHA
             sa = self._SECTION_SLOW_ALPHA
-            self._centroid_fast = fa * self._centroid_fast + (1 - fa) * self._centroid
-            self._centroid_slow = sa * self._centroid_slow + (1 - sa) * self._centroid
-            # Track broadband onset strength for energy-based section changes
+            # Normalize centroid to ~0-1 (log scale, 20 Hz = 0, 20 kHz = 1)
+            c_norm = (np.log2(max(self._centroid, 20.0)) - self._CENTROID_LOG_MIN) / self._CENTROID_LOG_RANGE
+            self._centroid_fast_norm = fa * self._centroid_fast_norm + (1 - fa) * c_norm
+            self._centroid_slow_norm = sa * self._centroid_slow_norm + (1 - sa) * c_norm
+            # Normalize energy by theoretical max
             oss = float(np.dot(spectrum, A_WEIGHTS))
-            self._energy_fast = fa * self._energy_fast + (1 - fa) * oss
-            self._energy_slow = sa * self._energy_slow + (1 - sa) * oss
+            e_norm = oss / self._ENERGY_REF
+            self._energy_fast_norm = fa * self._energy_fast_norm + (1 - fa) * e_norm
+            self._energy_slow_norm = sa * self._energy_slow_norm + (1 - sa) * e_norm
 
             # RMS around centroid (±1 octave)
             lo_c = self._centroid / 2
@@ -174,24 +183,27 @@ class EnergyAnalyzer:
 
     @property
     def section_change(self) -> float:
-        """Section change signal: euclidean distance in (centroid, energy) space.
+        """Section change signal: weighted euclidean distance in normalized space.
 
-        Uses dual-EMA (fast ~2s, slow ~15s) on both spectral centroid
-        and broadband energy. Returns the normalized distance between
-        fast and slow positions. Catches spectral shifts (verse→chorus),
-        dynamic shifts (quiet→loud), and combined changes.
+        Uses dual-EMA (fast ~2s, slow ~15s) on normalized centroid (log Hz,
+        0-1) and energy (fraction of theoretical max). Symmetric — loud→quiet
+        and quiet→loud produce the same distance.
 
-        Near 0 = stable section, > ~0.3 = section boundary.
+        Axes scaled by configurable weights (section.weight_centroid/energy).
         """
-        centroid_div = 0.0
-        if self._centroid_slow > 0:
-            centroid_div = ((self._centroid_fast - self._centroid_slow)
-                            / self._centroid_slow)
-        energy_div = 0.0
-        if self._energy_slow > 1e-10:
-            energy_div = ((self._energy_fast - self._energy_slow)
-                          / self._energy_slow)
-        return float(np.sqrt(centroid_div ** 2 + energy_div ** 2))
+        dc = self._SECTION_W_CENTROID * (self._centroid_fast_norm - self._centroid_slow_norm)
+        de = self._SECTION_W_ENERGY * (self._energy_fast_norm - self._energy_slow_norm)
+        return float(np.sqrt(dc ** 2 + de ** 2))
+
+    @property
+    def section_fast(self) -> tuple[float, float]:
+        """Fast EMA position in normalized (centroid, energy) space."""
+        return (self._centroid_fast_norm, self._energy_fast_norm)
+
+    @property
+    def section_slow(self) -> tuple[float, float]:
+        """Slow EMA position in normalized (centroid, energy) space."""
+        return (self._centroid_slow_norm, self._energy_slow_norm)
 
     @property
     def centroid_rms(self) -> float:
