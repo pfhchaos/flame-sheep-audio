@@ -35,8 +35,11 @@ DEFAULTS = {
         'min_flux': 1e-7,
     },
     'stability': {
+        'method': 'median',        # 'ema' (lightweight) or 'median' (causal HPSS)
         'fast_alpha': 0.95,
         'slow_alpha': 0.995,
+        'median_kernel_time': 15,  # frames (~160ms at HOP cadence)
+        'median_kernel_freq': 15,  # bins (~350 Hz)
     },
     'energy': {
         'rms_alpha': 0.9,
