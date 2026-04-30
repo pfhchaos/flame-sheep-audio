@@ -65,8 +65,9 @@ class EnergyAnalyzer:
         self._percussiveness = 0.5
         self._perc_alpha = cfg.energy.percussiveness_alpha
         # Spectral shape distance — alternative percussiveness measure
-        self._prev_norm_spectrum: np.ndarray | None = None
-        self._shape_percussiveness = 0.5
+        self._shape_ema: np.ndarray | None = None  # EMA of normalized spectrum
+        self._shape_alpha = self._perc_alpha        # same smoothing as flux perc
+        self._shape_percussiveness = 0.0
 
         # Harmonic energy (stability-weighted)
         self._harmonic_rms = 0.0
@@ -148,22 +149,30 @@ class EnergyAnalyzer:
                                      + (1 - self._perc_alpha) * raw_perc)
 
         # Spectral shape distance percussiveness:
-        # Cosine distance between consecutive normalized spectra.
-        # Drum hit = radical shape change = high distance.
-        # Vibrato = tiny wobble = low distance.
+        # 1. Maintain EMA of normalized spectrum ("what it usually looks like")
+        # 2. Cosine distance between current frame and EMA shape
+        # 3. EMA of those distances → percussiveness
+        # Drums deviate from the running shape. Vibrato barely moves it.
         spec_norm = np.linalg.norm(spectrum)
         if spec_norm > 1e-10:
             normalized = spectrum / spec_norm
-            if self._prev_norm_spectrum is not None:
-                shape_dist = 1.0 - float(np.dot(self._prev_norm_spectrum, normalized))
-                # Clamp to [0, 1] (numerical precision can push slightly negative)
+            if self._shape_ema is None:
+                self._shape_ema = normalized.copy()
+            else:
+                # Distance from current frame to the running average shape
+                shape_dist = 1.0 - float(np.dot(self._shape_ema, normalized))
                 shape_dist = max(0.0, min(1.0, shape_dist))
                 self._shape_percussiveness = (
-                    self._perc_alpha * self._shape_percussiveness
-                    + (1 - self._perc_alpha) * shape_dist)
-            self._prev_norm_spectrum = normalized
-        else:
-            self._prev_norm_spectrum = None
+                    self._shape_alpha * self._shape_percussiveness
+                    + (1 - self._shape_alpha) * shape_dist)
+                # Update shape EMA (re-normalize to unit length)
+                raw_ema = (self._shape_alpha * self._shape_ema
+                           + (1 - self._shape_alpha) * normalized)
+                ema_norm = np.linalg.norm(raw_ema)
+                if ema_norm > 1e-10:
+                    self._shape_ema = raw_ema / ema_norm
+                else:
+                    self._shape_ema = normalized.copy()
 
         return self._band_rms.get('subbass', 0.0)
 
