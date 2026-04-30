@@ -67,7 +67,7 @@ class EnergyAnalyzer:
         # Spectral shape distance — alternative percussiveness measure
         self._shape_ema: np.ndarray | None = None  # EMA of normalized spectrum
         self._shape_alpha = self._perc_alpha        # same smoothing as flux perc
-        self._shape_percussiveness = 0.0
+        self._spectral_novelty = 0.0
 
         # Harmonic energy (stability-weighted)
         self._harmonic_rms = 0.0
@@ -162,8 +162,8 @@ class EnergyAnalyzer:
                 # Distance from current frame to the running average shape
                 shape_dist = 1.0 - float(np.dot(self._shape_ema, normalized))
                 shape_dist = max(0.0, min(1.0, shape_dist))
-                self._shape_percussiveness = (
-                    self._shape_alpha * self._shape_percussiveness
+                self._spectral_novelty = (
+                    self._shape_alpha * self._spectral_novelty
                     + (1 - self._shape_alpha) * shape_dist)
                 # Update shape EMA (re-normalize to preserve unit length)
                 raw_ema = (self._shape_alpha * self._shape_ema
@@ -251,7 +251,7 @@ class EnergyAnalyzer:
         method = getattr(cfg.energy, 'percussiveness_method', 'shape')
         if method == 'flux':
             return self._percussiveness
-        return self._shape_percussiveness
+        return self._spectral_novelty
 
     @property
     def flux_percussiveness(self) -> float:
@@ -259,9 +259,9 @@ class EnergyAnalyzer:
         return self._percussiveness
 
     @property
-    def shape_percussiveness(self) -> float:
+    def spectral_novelty(self) -> float:
         """Spectral shape distance percussiveness (for comparison)."""
-        return self._shape_percussiveness
+        return self._spectral_novelty
 
     @property
     def harmonic_rms(self) -> float:
