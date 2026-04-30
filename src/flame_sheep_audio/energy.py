@@ -64,6 +64,9 @@ class EnergyAnalyzer:
         # Percussiveness tracking
         self._percussiveness = 0.5
         self._perc_alpha = cfg.energy.percussiveness_alpha
+        # Spectral shape distance — alternative percussiveness measure
+        self._prev_norm_spectrum: np.ndarray | None = None
+        self._shape_percussiveness = 0.5
 
         # Harmonic energy (stability-weighted)
         self._harmonic_rms = 0.0
@@ -138,11 +141,29 @@ class EnergyAnalyzer:
                         self._centroid_alpha * self._harmonic_centroid_rms
                         + (1 - self._centroid_alpha) * raw_hc)
 
-        # Percussiveness: flux / magnitude ratio
+        # Percussiveness: flux / magnitude ratio (original method)
         if flux is not None and mag_sum > 1e-10:
             raw_perc = float(flux.sum() / mag_sum)
             self._percussiveness = (self._perc_alpha * self._percussiveness
                                      + (1 - self._perc_alpha) * raw_perc)
+
+        # Spectral shape distance percussiveness:
+        # Cosine distance between consecutive normalized spectra.
+        # Drum hit = radical shape change = high distance.
+        # Vibrato = tiny wobble = low distance.
+        spec_norm = np.linalg.norm(spectrum)
+        if spec_norm > 1e-10:
+            normalized = spectrum / spec_norm
+            if self._prev_norm_spectrum is not None:
+                shape_dist = 1.0 - float(np.dot(self._prev_norm_spectrum, normalized))
+                # Clamp to [0, 1] (numerical precision can push slightly negative)
+                shape_dist = max(0.0, min(1.0, shape_dist))
+                self._shape_percussiveness = (
+                    self._perc_alpha * self._shape_percussiveness
+                    + (1 - self._perc_alpha) * shape_dist)
+            self._prev_norm_spectrum = normalized
+        else:
+            self._prev_norm_spectrum = None
 
         return self._band_rms.get('subbass', 0.0)
 
@@ -212,8 +233,26 @@ class EnergyAnalyzer:
 
     @property
     def percussiveness(self) -> float:
-        """Flux/magnitude ratio — high = drums/transients, low = sustained tonal."""
+        """Percussiveness measure — high = drums/transients, low = sustained tonal.
+
+        Uses spectral shape distance (cosine distance between consecutive
+        normalized spectra) by default. Falls back to flux/magnitude ratio
+        if configured via energy.percussiveness_method = 'flux'.
+        """
+        method = getattr(cfg.energy, 'percussiveness_method', 'shape')
+        if method == 'flux':
+            return self._percussiveness
+        return self._shape_percussiveness
+
+    @property
+    def flux_percussiveness(self) -> float:
+        """Original flux/magnitude ratio percussiveness (for comparison)."""
         return self._percussiveness
+
+    @property
+    def shape_percussiveness(self) -> float:
+        """Spectral shape distance percussiveness (for comparison)."""
+        return self._shape_percussiveness
 
     @property
     def harmonic_rms(self) -> float:
