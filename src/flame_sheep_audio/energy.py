@@ -165,14 +165,10 @@ class EnergyAnalyzer:
                 self._shape_percussiveness = (
                     self._shape_alpha * self._shape_percussiveness
                     + (1 - self._shape_alpha) * shape_dist)
-                # Update shape EMA (re-normalize to unit length)
-                raw_ema = (self._shape_alpha * self._shape_ema
-                           + (1 - self._shape_alpha) * normalized)
-                ema_norm = np.linalg.norm(raw_ema)
-                if ema_norm > 1e-10:
-                    self._shape_ema = raw_ema / ema_norm
-                else:
-                    self._shape_ema = normalized.copy()
+                # Update shape EMA (unnormalized — the norm drift appears
+                # to help speech/music discrimination)
+                self._shape_ema = (self._shape_alpha * self._shape_ema
+                                   + (1 - self._shape_alpha) * normalized)
 
         return self._band_rms.get('subbass', 0.0)
 
