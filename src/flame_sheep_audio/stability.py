@@ -145,6 +145,91 @@ class _StabilityMedian:
 
 
 # ----------------------------------------------------------------
+# Local shape projection HPSS
+# ----------------------------------------------------------------
+
+class _StabilityShape:
+    """Local spectral shape projection for harmonic/percussive separation.
+
+    Maintains an EMA of the normalized spectrum. For each frame, slides
+    a window across both the current and EMA spectrum, computing cosine
+    distance per position. Low local distance = harmonic (matches
+    recent shape), high = percussive (new/different).
+
+    Handles vibrato naturally — energy wobbling between adjacent bins
+    still matches the local patch shape.
+    """
+
+    def __init__(self, alpha: float = 0.95, kernel: int = 7) -> None:
+        self._alpha = alpha
+        self._kernel = kernel
+        self._shape_ema: np.ndarray | None = None
+        self._harmonic_mask = np.full(N_BINS, 0.5, dtype=np.float32)
+
+    def update(self, magnitude: np.ndarray) -> None:
+        spec_norm = np.linalg.norm(magnitude)
+        if spec_norm < 1e-10:
+            return
+
+        normalized = magnitude / spec_norm
+
+        if self._shape_ema is None:
+            self._shape_ema = normalized.copy()
+            return
+
+        # Sliding window cosine distance between current and EMA
+        half_k = self._kernel // 2
+        # Pad both signals
+        cur_pad = np.pad(normalized, half_k, mode='reflect')
+        ema_pad = np.pad(self._shape_ema, half_k, mode='reflect')
+
+        # Sliding dot product via convolution-like approach
+        cur_windows = np.lib.stride_tricks.sliding_window_view(cur_pad, self._kernel)
+        ema_windows = np.lib.stride_tricks.sliding_window_view(ema_pad, self._kernel)
+
+        # Per-position cosine similarity
+        dots = np.sum(cur_windows * ema_windows, axis=1)
+        cur_norms = np.sqrt(np.sum(cur_windows ** 2, axis=1))
+        ema_norms = np.sqrt(np.sum(ema_windows ** 2, axis=1))
+        cos_sim = dots / (cur_norms * ema_norms + 1e-10)
+
+        # Convert similarity to stability mask (0 = percussive, 1 = harmonic)
+        # cos_sim is already 0-1 for non-negative spectra
+        self._harmonic_mask = np.clip(cos_sim, 0.0, 1.0).astype(np.float32)
+
+        # Silence: if both patches are near-zero, default to harmonic
+        silent_bins = (cur_norms < 1e-8) & (ema_norms < 1e-8)
+        self._harmonic_mask[silent_bins[:N_BINS]] = 1.0
+
+        # Update shape EMA (re-normalize)
+        raw_ema = self._alpha * self._shape_ema + (1 - self._alpha) * normalized
+        ema_norm = np.linalg.norm(raw_ema)
+        if ema_norm > 1e-10:
+            self._shape_ema = raw_ema / ema_norm
+        else:
+            self._shape_ema = normalized.copy()
+
+    def band_stability(self, mask: np.ndarray) -> float:
+        if not mask.any():
+            return 1.0
+        return float(self._harmonic_mask[mask].mean())
+
+    def stability_per_bin(self) -> np.ndarray:
+        return self._harmonic_mask.copy()
+
+    def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
+        if not mask.any():
+            return 0.0
+        weighted = magnitude * self._harmonic_mask
+        band = weighted[mask]
+        return float(np.sqrt(np.mean(band ** 2)))
+
+    def reset(self) -> None:
+        self._shape_ema = None
+        self._harmonic_mask[:] = 0.5
+
+
+# ----------------------------------------------------------------
 # Public interface (selects implementation)
 # ----------------------------------------------------------------
 
@@ -177,6 +262,12 @@ class MagnitudeStability:
             kernel_freq = getattr(cfg.stability, 'median_kernel_freq', 31)
             self._fast = _StabilityMedian(kernel_time=kernel_time,
                                            kernel_freq=kernel_freq)
+        elif method == 'shape':
+            shape_kernel = getattr(cfg.stability, 'shape_kernel', 7)
+            self._fast = _StabilityShape(alpha=fast_alpha, kernel=shape_kernel)
+            # Note: shape method scored 0.832 HPSS sim (vs EMA 0.839, median 0.859).
+            # Local cosine similarity is too permissive on smooth spectra.
+            # Kept as option for experimentation but not recommended.
         else:
             self._fast = _StabilityEMA(fast_alpha)
         self._slow = _StabilityEMA(slow_alpha)
