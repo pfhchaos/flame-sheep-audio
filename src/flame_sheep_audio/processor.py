@@ -55,13 +55,13 @@ class AudioProcessor:
 
         self._source = source or PipeWireSource(device=device)
         self._spectrum_engine = spectrum_engine or SpectrumEngine()
+        # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
+        freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._stability = MagnitudeStability()
         self._detector = FluxBeatDetector(adaptive=adaptive, sharpness=sharpness,
                                           stability=self._stability,
                                           band_config=band_config,
                                           freqs=freqs)
-        # Pass custom freqs if the engine provides them (e.g., OctaveBankEngine)
-        freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
         self._density = OnsetDensityTracker(band_config=band_config)
 
