@@ -3,15 +3,16 @@
 Determines how the visualization responds based on what the audio
 engine is detecting:
 
-  beat:   Rhythmic music — all axes driven by onsets and density.
-  energy: Audio present but no rhythm (speech, ambient, drones) —
+  beat:   Music — all axes driven by onsets and density.
+  energy: Non-music audio (speech, ambient, drones) —
           brightness/detail driven by slow envelope, genome drifts,
           palette/zoom suppressed.
   idle:   Silence — slow autonomous genome drift.
 
-State transitions use percussiveness as the music/not-music
-discriminator and broadband RMS for silence detection. Transitions
-have asymmetric timing: fast entry to beat mode, slow exit.
+Uses spectral novelty (cosine distance from EMA spectral shape) as the
+primary music/speech discriminator. Music is spectrally predictable
+(low novelty), speech constantly shifts formants (high novelty).
+ACF tempo confidence as secondary confirmation of rhythmic content.
 """
 
 from __future__ import annotations
@@ -30,15 +31,17 @@ class Mode(Enum):
     BEAT = 'beat'
 
 
-# Transition timing (in frames at ~60fps)
-BEAT_ENTER_FRAMES = 30       # ~0.5s of high percussiveness -> enter beat
-BEAT_EXIT_FRAMES = 900       # ~15s of low percussiveness -> exit beat
-ENERGY_TO_IDLE_FRAMES = 1800 # ~30s of silence -> enter idle
-IDLE_EXIT_FRAMES = 1         # instant exit from idle on any audio
+# Transition timing (in frames at ~93fps HOP cadence)
+BEAT_ENTER_FRAMES = 30       # ~0.3s of music detected -> enter beat
+BEAT_EXIT_FRAMES = 900       # ~10s of non-music -> exit beat
+ENERGY_TO_IDLE_FRAMES = 1800 # ~20s of silence -> enter idle
 
-# Thresholds (hysteresis: harder to enter beat than to stay)
-PERC_ENTER = 0.5             # percussiveness to enter beat mode
-PERC_EXIT = 0.35             # percussiveness to exit beat mode
+# Spectral novelty thresholds (from corpus analysis 2026-04-30):
+#   music:  mean 0.09-0.20
+#   speech: mean 0.22-0.29
+#   noise:  mean 0.11-0.15
+NOVELTY_SPEECH = 0.20        # above this = likely speech -> energy mode
+NOVELTY_MUSIC = 0.16         # below this = likely music -> beat mode (hysteresis)
 ACF_CONFIDENCE_ENTER = 0.7   # ACF confidence to enter beat (rhythmic non-percussive music)
 RMS_THRESHOLD = 0.0001       # broadband RMS below this = silence
 
@@ -52,47 +55,38 @@ class ModeDetector:
 
     def __init__(self) -> None:
         self.mode = Mode.IDLE
-        self._perc_ema = 0.0    # smoothed percussiveness (start low = unknown)
-        self._perc_alpha = 0.95 # EMA smoothing for percussiveness
-
-        # Energy mode disabled pending better speech/music discrimination.
-        # All non-silent audio goes to beat mode for now.
-        self._energy_mode_enabled = False
+        self._novelty_ema = 0.0    # smoothed spectral novelty
+        self._novelty_alpha = 0.95 # EMA smoothing
 
         # Frame counters for hysteresis
-        self._beat_frames = 0   # frames of high percussiveness
-        self._quiet_frames = 0  # frames of low percussiveness (in beat mode)
-        self._silence_frames = 0  # frames of silence
+        self._beat_frames = 0      # frames of music-like audio
+        self._quiet_frames = 0     # frames of non-music (in beat mode)
+        self._silence_frames = 0   # frames of silence
 
     def tick(self, audio: AudioState) -> Mode:
         """Update mode from current audio state. Returns the new mode."""
         old_mode = self.mode
 
-        # Smooth percussiveness
-        self._perc_ema = (self._perc_alpha * self._perc_ema
-                          + (1 - self._perc_alpha) * audio.percussiveness)
+        # Smooth spectral novelty
+        self._novelty_ema = (self._novelty_alpha * self._novelty_ema
+                             + (1 - self._novelty_alpha) * audio.spectral_novelty)
 
         # Broadband RMS
         max_rms = max(b.rms for b in audio.bands.values())
 
         is_silent = max_rms < RMS_THRESHOLD
-        # Hysteresis: harder to enter beat than to stay
-        # ACF confidence as secondary: rhythmic non-percussive music
-        # (acoustic guitar, piano) has strong periodicity but low percussiveness
+
+        # Music detection: low spectral novelty (predictable spectrum)
+        # OR strong tempo confidence (rhythmic content even if novelty is moderate)
         if self.mode == Mode.BEAT:
-            # Stay in beat: percussiveness alone (drums), OR
-            # lower percussiveness AND ACF confidence (rhythmic content).
-            # Speech (~0.3 perc, ~0.4 acf) fails both conditions.
-            PERC_STAY = 0.25
-            is_percussive = (self._perc_ema > PERC_EXIT
-                             or (self._perc_ema > PERC_STAY
-                                 and audio.tempo_confidence > ACF_CONFIDENCE_ENTER))
+            # Stay in beat: wider threshold (hysteresis)
+            is_music = (self._novelty_ema < NOVELTY_SPEECH
+                        or audio.tempo_confidence > ACF_CONFIDENCE_ENTER)
         else:
-            # Enter beat: percussiveness alone (drums), OR
-            # both moderate percussiveness AND ACF confidence (rhythmic non-percussive)
-            is_percussive = (self._perc_ema > PERC_ENTER
-                             or (self._perc_ema > PERC_EXIT
-                                 and audio.tempo_confidence > ACF_CONFIDENCE_ENTER))
+            # Enter beat: stricter threshold
+            is_music = (self._novelty_ema < NOVELTY_MUSIC
+                        or (self._novelty_ema < NOVELTY_SPEECH
+                            and audio.tempo_confidence > ACF_CONFIDENCE_ENTER))
 
         # Update counters
         if is_silent:
@@ -101,7 +95,7 @@ class ModeDetector:
             self._quiet_frames += 1
         else:
             self._silence_frames = 0
-            if is_percussive:
+            if is_music:
                 self._beat_frames += 1
                 self._quiet_frames = 0
             else:
@@ -111,13 +105,10 @@ class ModeDetector:
         # State transitions
         if self.mode == Mode.IDLE:
             if not is_silent:
-                if self._energy_mode_enabled:
-                    if audio.percussiveness > PERC_ENTER:
-                        self.mode = Mode.BEAT
-                    else:
-                        self.mode = Mode.ENERGY
-                else:
+                if is_music:
                     self.mode = Mode.BEAT
+                else:
+                    self.mode = Mode.ENERGY
 
         elif self.mode == Mode.ENERGY:
             if self._beat_frames >= BEAT_ENTER_FRAMES:
@@ -128,7 +119,7 @@ class ModeDetector:
         elif self.mode == Mode.BEAT:
             if is_silent and self._silence_frames >= ENERGY_TO_IDLE_FRAMES:
                 self.mode = Mode.IDLE
-            elif self._energy_mode_enabled and self._quiet_frames >= BEAT_EXIT_FRAMES:
+            elif self._quiet_frames >= BEAT_EXIT_FRAMES:
                 if is_silent:
                     self.mode = Mode.IDLE
                 else:
@@ -136,7 +127,7 @@ class ModeDetector:
 
         if self.mode != old_mode:
             log.info(f'[mode] {old_mode.value} -> {self.mode.value}  '
-                     f'perc={self._perc_ema:.3f} acf={audio.tempo_confidence:.3f} '
+                     f'novelty={self._novelty_ema:.3f} acf={audio.tempo_confidence:.3f} '
                      f'rms={max_rms:.6f}')
 
         return self.mode
@@ -144,7 +135,7 @@ class ModeDetector:
     def reset(self) -> None:
         """Reset to idle — call on song change."""
         self.mode = Mode.IDLE
-        self._perc_ema = 0.0
+        self._novelty_ema = 0.0
         self._beat_frames = 0
         self._quiet_frames = 0
         self._silence_frames = 0

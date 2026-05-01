@@ -60,6 +60,7 @@ class AudioState:
 
     # Global
     percussiveness: float = 0.5
+    spectral_novelty: float = 0.0    # cosine distance from EMA spectral shape
     section_change: float = 0.0      # centroid divergence (fast-slow EMA, normalized)
     bpm: float = 0.0
     effective_bpm: float = 120.0     # blended with default based on confidence
@@ -91,6 +92,7 @@ class AudioSnapshot:
 
     # Global
     percussiveness: float = 0.5
+    spectral_novelty: float = 0.0
     section_change: float = 0.0
     bpm: float = 0.0
     effective_bpm: float = 120.0
