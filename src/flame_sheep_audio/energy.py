@@ -35,7 +35,10 @@ class EnergyAnalyzer:
         self._a_weights = a_weight_curve(self._freqs) if freqs is not None else A_WEIGHTS
 
         # Per-band RMS and harmonic RMS (masks built from config)
-        self._masks = {name: make_mask(*rng)
+        # Use custom freqs for mask building if provided
+        def _make_mask(lo: float, hi: float) -> np.ndarray:
+            return (self._freqs >= lo) & (self._freqs < hi)
+        self._masks = {name: _make_mask(*rng)
                        for name, rng in band_config.all_band_ranges.items()}
         self._band_rms = {name: 0.0 for name in self._masks}
         self._band_harmonic_rms = {name: 0.0 for name in self._masks}

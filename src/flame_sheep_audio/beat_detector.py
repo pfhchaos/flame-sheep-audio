@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .stability import MagnitudeStability
 
-from ._constants import N_BINS, HISTORY_LEN, FFT_SIZE, HOP_SIZE
+from ._constants import N_BINS, HISTORY_LEN, FFT_SIZE, HOP_SIZE, FREQS
 from .config import cfg
 from .tempo_scaler import TempoScaler
 from ._band_config import BandConfig, default_band_config
@@ -57,20 +57,24 @@ class FluxBeatDetector:
 
     def __init__(self, adaptive: bool = False, sharpness: bool = True,
                  stability: MagnitudeStability | None = None,
-                 band_config: BandConfig | None = None) -> None:
+                 band_config: BandConfig | None = None,
+                 freqs: np.ndarray | None = None) -> None:
         self._adaptive = adaptive
         self._spring_bands_enabled = cfg.adaptive.enabled
         self._sharpness = sharpness
         self._stability = stability  # MagnitudeStability reference (optional)
         self._bpm = 0.0
+        self._freqs = freqs if freqs is not None else FREQS
 
         if band_config is None:
             band_config = default_band_config()
         self._band_config = band_config
         self._detection_names = list(band_config.detection_band_names)
 
-        # Static band masks (built from config)
-        self._bands = {b.name: make_mask(*b.freq_range)
+        # Static band masks (built from config, using custom freqs if provided)
+        def _mask(lo: float, hi: float) -> np.ndarray:
+            return (self._freqs >= lo) & (self._freqs < hi)
+        self._bands = {b.name: _mask(*b.freq_range)
                        for b in band_config.detection_bands}
 
         # Spring-model adaptive bands

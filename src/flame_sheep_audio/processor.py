@@ -47,18 +47,22 @@ class AudioProcessor:
 
     def __init__(self, device: str | int | None = None, adaptive: bool = False,
                  sharpness: bool = True, source: SignalSource | None = None,
-                 band_config: BandConfig | None = None):
+                 band_config: BandConfig | None = None,
+                 spectrum_engine: SpectrumEngine | None = None):
         if band_config is None:
             band_config = default_band_config()
         self._band_config = band_config
 
         self._source = source or PipeWireSource(device=device)
-        self._spectrum_engine = SpectrumEngine()
+        self._spectrum_engine = spectrum_engine or SpectrumEngine()
         self._stability = MagnitudeStability()
         self._detector = FluxBeatDetector(adaptive=adaptive, sharpness=sharpness,
                                           stability=self._stability,
-                                          band_config=band_config)
-        self._energy = EnergyAnalyzer(band_config=band_config)
+                                          band_config=band_config,
+                                          freqs=freqs)
+        # Pass custom freqs if the engine provides them (e.g., OctaveBankEngine)
+        freqs = getattr(self._spectrum_engine, 'bin_centers', None)
+        self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
         self._density = OnsetDensityTracker(band_config=band_config)
 
         # Auto-detect: FeedSource is synchronous, everything else is threaded

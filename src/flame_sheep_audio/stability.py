@@ -29,10 +29,13 @@ class _StabilityEMA:
 
     def __init__(self, alpha: float) -> None:
         self._alpha = alpha
-        self._mag_ema = np.zeros(N_BINS, dtype=np.float32)
-        self._mag_var = np.zeros(N_BINS, dtype=np.float32)
+        self._mag_ema: np.ndarray | None = None
+        self._mag_var: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
+        if self._mag_ema is None:
+            self._mag_ema = np.zeros_like(magnitude)
+            self._mag_var = np.zeros_like(magnitude)
         diff = magnitude - self._mag_ema
         self._mag_ema = self._alpha * self._mag_ema + (1 - self._alpha) * magnitude
         diff2 = magnitude - self._mag_ema  # post-update residual (Welford)
@@ -40,7 +43,7 @@ class _StabilityEMA:
 
     def band_stability(self, mask: np.ndarray) -> float:
         """0.0 = transient, 1.0 = stable/harmonic."""
-        if not mask.any():
+        if not mask.any() or self._mag_var is None:
             return 1.0
         band_var = self._mag_var[mask].mean()
         band_mag = self._mag_ema[mask].mean()
@@ -51,6 +54,8 @@ class _StabilityEMA:
 
     def stability_per_bin(self) -> np.ndarray:
         """Per-bin stability scores, 0..1. 1=harmonic, 0=transient."""
+        if self._mag_var is None:
+            return np.full(N_BINS, 0.5, dtype=np.float32)
         cv = np.sqrt(self._mag_var) / (self._mag_ema + 1e-10)
         return (1.0 / (1.0 + cv)).astype(np.float32)
 
@@ -64,8 +69,8 @@ class _StabilityEMA:
         return float(np.sqrt(np.mean(band ** 2)))
 
     def reset(self) -> None:
-        self._mag_ema[:] = 0.0
-        self._mag_var[:] = 0.0
+        self._mag_ema = None
+        self._mag_var = None
 
 
 # ----------------------------------------------------------------
@@ -87,12 +92,16 @@ class _StabilityMedian:
     def __init__(self, kernel_time: int = 31, kernel_freq: int = 31) -> None:
         self._kt = kernel_time
         self._kf = kernel_freq
-        self._buf = np.zeros((kernel_time, N_BINS), dtype=np.float32)
+        self._buf: np.ndarray | None = None
         self._pos = 0
         self._filled = 0
-        self._harmonic_mask = np.full(N_BINS, 0.5, dtype=np.float32)
+        self._harmonic_mask: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
+        n_bins = len(magnitude)
+        if self._buf is None:
+            self._buf = np.zeros((self._kt, n_bins), dtype=np.float32)
+            self._harmonic_mask = np.full(n_bins, 0.5, dtype=np.float32)
         # Write new frame to circular buffer
         self._buf[self._pos] = magnitude
         self._pos = (self._pos + 1) % self._kt
@@ -121,27 +130,29 @@ class _StabilityMedian:
 
     def band_stability(self, mask: np.ndarray) -> float:
         """Mean harmonic mask value in band."""
-        if not mask.any():
+        if not mask.any() or self._harmonic_mask is None:
             return 1.0
         return float(self._harmonic_mask[mask].mean())
 
     def stability_per_bin(self) -> np.ndarray:
         """Per-bin harmonic mask, 0..1. 1=harmonic, 0=percussive."""
+        if self._harmonic_mask is None:
+            return np.full(N_BINS, 0.5, dtype=np.float32)
         return self._harmonic_mask.copy()
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
         """RMS weighted by harmonic mask."""
-        if not mask.any():
+        if not mask.any() or self._harmonic_mask is None:
             return 0.0
         weighted = magnitude * self._harmonic_mask
         band = weighted[mask]
         return float(np.sqrt(np.mean(band ** 2)))
 
     def reset(self) -> None:
-        self._buf[:] = 0.0
+        self._buf = None
         self._pos = 0
         self._filled = 0
-        self._harmonic_mask[:] = 0.5
+        self._harmonic_mask = None
 
 
 # ----------------------------------------------------------------
