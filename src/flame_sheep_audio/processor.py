@@ -77,8 +77,8 @@ class AudioProcessor:
 
         # Shared state (lock-protected, read by drain(), written by audio thread or process())
         self._lock     = threading.Lock()
-        self._spectrum = np.zeros(N_BINS, dtype=np.float32)
-        self._stability_bins = np.zeros(N_BINS, dtype=np.float32)
+        self._spectrum: np.ndarray | None = None
+        self._stability_bins: np.ndarray | None = None
         self._waveform = np.zeros(FFT_SIZE, dtype=np.float32)
         self._centroid = 1000.0
         self._centroid_delta = 0.0
@@ -178,8 +178,15 @@ class AudioProcessor:
 
             with self._lock:
                 self._pending_events.extend(events)
-                self._spectrum[:] = frame.magnitude
-                self._stability_bins[:] = self._stability.stability_per_bin()
+                if self._spectrum is None:
+                    self._spectrum = frame.magnitude.copy()
+                else:
+                    self._spectrum[:] = frame.magnitude
+                stab_bins = self._stability.stability_per_bin()
+                if self._stability_bins is None:
+                    self._stability_bins = stab_bins.copy()
+                else:
+                    self._stability_bins[:] = stab_bins
                 self._waveform[:] = frame.waveform
                 self._centroid = self._energy.centroid
                 self._centroid_delta = self._energy.centroid_delta
@@ -266,10 +273,11 @@ class AudioProcessor:
                                  onset_density=bs.onset_density,
                                  density_delta=bs.density_delta)
                  for name, bs in self._bands.items()}
+        empty = np.zeros(N_BINS, dtype=np.float32)
         return AudioSnapshot(
             events=events,
-            spectrum=self._spectrum.copy(),
-            stability=self._stability_bins.copy(),
+            spectrum=self._spectrum.copy() if self._spectrum is not None else empty.copy(),
+            stability=self._stability_bins.copy() if self._stability_bins is not None else empty.copy(),
             waveform=self._waveform.copy(),
             bands=bands,
             centroid=self._centroid,
@@ -320,8 +328,15 @@ class AudioProcessor:
         self._density.update(now)
 
         with self._lock:
-            self._spectrum[:] = frame.magnitude
-            self._stability_bins[:] = self._stability.stability_per_bin()
+            if self._spectrum is None:
+                self._spectrum = frame.magnitude.copy()
+            else:
+                self._spectrum[:] = frame.magnitude
+            stab_bins = self._stability.stability_per_bin()
+            if self._stability_bins is None:
+                self._stability_bins = stab_bins.copy()
+            else:
+                self._stability_bins[:] = stab_bins
             self._waveform[:] = frame.waveform
             self._centroid = self._energy.centroid
             self._centroid_delta = self._energy.centroid_delta
@@ -383,8 +398,10 @@ class AudioProcessor:
 
     @property
     def spectrum(self) -> np.ndarray:
-        """Latest FFT magnitude spectrum, N_BINS long. For GPU texture upload."""
+        """Latest magnitude spectrum. For GPU texture upload."""
         with self._lock:
+            if self._spectrum is None:
+                return np.zeros(N_BINS, dtype=np.float32)
             return self._spectrum.copy()
 
     @property
@@ -433,7 +450,8 @@ class SyntheticAudioProcessor:
 
         self._start_time: float | None = None
         self._last: dict[str, float]   = {'kick': -1.0, 'snare': -1.0, 'hihat': -1.0}
-        self._spectrum = np.zeros(N_BINS, dtype=np.float32)
+        self._n_bins   = N_BINS  # default; overridable for non-FFT engines
+        self._spectrum = np.zeros(self._n_bins, dtype=np.float32)
         self._rms      = 0.5  # synthetic audio is "always playing"
 
     def start(self) -> None:

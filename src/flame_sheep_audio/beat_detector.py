@@ -214,7 +214,7 @@ class FluxBeatDetector:
         if self._stability is not None:
             stab = self._stability._fast.stability_per_bin()
         else:
-            stab = np.zeros(N_BINS, dtype=np.float32)
+            stab = np.zeros(len(flux), dtype=np.float32)
 
         for sb in self._spring_bands.values():
             sb.update_flux_ema(flux, stab)
@@ -246,6 +246,8 @@ class FluxBeatDetector:
 
         for ab in self._adaptive_bands.values():
             band_flux = flux * ab.allowed_mask
+            if ab.flux_accum is None:
+                ab.flux_accum = np.zeros_like(flux)
             ab.flux_accum = alpha * ab.flux_accum + (1 - alpha) * band_flux
 
         if self._fast_adapt_remaining > 0:

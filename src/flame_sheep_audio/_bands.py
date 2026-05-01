@@ -81,11 +81,13 @@ class SpringBand:
         self.center = self.default_center
         self.width = self.default_width
         self.mask = make_mask(lo_d, hi_d)
-        self._flux_ema = np.zeros(N_BINS, dtype=np.float32)
+        self._flux_ema: np.ndarray | None = None
 
     def update_flux_ema(self, flux: np.ndarray, stability: np.ndarray,
                         alpha: float = 0.95) -> None:
         """Accumulate stability-weighted flux (percussive energy only)."""
+        if self._flux_ema is None:
+            self._flux_ema = np.zeros_like(flux)
         # Weight flux by (1-stability) so transient bins dominate
         percussive_flux = flux * (1.0 - stability)
         allowed = percussive_flux * self._allowed_mask_f()
@@ -93,10 +95,12 @@ class SpringBand:
 
     def flux_centroid(self) -> float:
         """Centroid of accumulated flux within allowed range."""
+        if self._flux_ema is None:
+            return self.default_center
         total = self._flux_ema.sum()
         if total < 1e-10:
             return self.default_center
-        return float(np.dot(FREQS, self._flux_ema) / total)
+        return float(np.dot(FREQS[:len(self._flux_ema)], self._flux_ema) / total)
 
     def apply_forces(self, anchor_k: float, flux_k: float,
                      neighbors: list[SpringBand], repulsion_k: float) -> None:
@@ -127,7 +131,8 @@ class SpringBand:
         self.width = self.default_width
         self.mask = make_mask(self.default_center - self.default_width,
                               self.default_center + self.default_width)
-        self._flux_ema[:] = 0.0
+        if self._flux_ema is not None:
+            self._flux_ema[:] = 0.0
 
 
 class AdaptiveBand:
@@ -145,8 +150,9 @@ class AdaptiveBand:
         self.allowed_mask    = make_mask(lo_a, hi_a)
         self.default_weights = make_weights(lo_d, hi_d)
         self.weights         = self.default_weights.copy()
-        self.flux_accum      = np.zeros(N_BINS, dtype=np.float32)
+        self.flux_accum: np.ndarray | None = None
 
     def reset(self) -> None:
         self.weights = self.default_weights.copy()
-        self.flux_accum[:] = 0.0
+        if self.flux_accum is not None:
+            self.flux_accum[:] = 0.0

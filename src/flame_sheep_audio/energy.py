@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from .stability import MagnitudeStability
 
 from ._constants import N_BINS, FFT_SIZE, FREQS, SAMPLE_RATE
-from ._bands import make_mask, A_WEIGHTS
+from ._bands import make_mask, A_WEIGHTS, a_weight_curve
 from ._band_config import BandConfig, default_band_config
 from .config import cfg
 
@@ -25,11 +25,14 @@ class EnergyAnalyzer:
     """
 
     def __init__(self, alpha: float | None = None,
-                 band_config: BandConfig | None = None) -> None:
+                 band_config: BandConfig | None = None,
+                 freqs: np.ndarray | None = None) -> None:
         self._alpha = alpha if alpha is not None else cfg.energy.rms_alpha
         if band_config is None:
             band_config = default_band_config()
         self._band_config = band_config
+        self._freqs = freqs if freqs is not None else FREQS
+        self._a_weights = a_weight_curve(self._freqs) if freqs is not None else A_WEIGHTS
 
         # Per-band RMS and harmonic RMS (masks built from config)
         self._masks = {name: make_mask(*rng)
@@ -107,10 +110,10 @@ class EnergyAnalyzer:
                     sha * self._slow_harmonic_rms[name] + (1 - sha) * hrms)
 
         # Spectral centroid (A-weighted for perceptual accuracy)
-        weighted_spec = spectrum * A_WEIGHTS
+        weighted_spec = spectrum * self._a_weights
         mag_sum = weighted_spec.sum()
         if mag_sum > 1e-10:
-            raw_centroid = float(np.sum(FREQS * weighted_spec) / mag_sum)
+            raw_centroid = float(np.sum(self._freqs * weighted_spec) / mag_sum)
             self._prev_centroid = self._centroid
             self._centroid = (self._centroid_alpha * self._centroid
                               + (1 - self._centroid_alpha) * raw_centroid)
@@ -123,7 +126,7 @@ class EnergyAnalyzer:
             self._centroid_fast_norm = fa * self._centroid_fast_norm + (1 - fa) * c_norm
             self._centroid_slow_norm = sa * self._centroid_slow_norm + (1 - sa) * c_norm
             # Normalize energy by theoretical max
-            oss = float(np.dot(spectrum, A_WEIGHTS))
+            oss = float(np.dot(spectrum, self._a_weights))
             e_norm = oss / self._ENERGY_REF
             self._energy_fast_norm = fa * self._energy_fast_norm + (1 - fa) * e_norm
             self._energy_slow_norm = sa * self._energy_slow_norm + (1 - sa) * e_norm
@@ -131,7 +134,7 @@ class EnergyAnalyzer:
             # RMS around centroid (±1 octave)
             lo_c = self._centroid / 2
             hi_c = self._centroid * 2
-            centroid_mask = (FREQS >= lo_c) & (FREQS <= hi_c)
+            centroid_mask = (self._freqs >= lo_c) & (self._freqs <= hi_c)
             if centroid_mask.any():
                 raw_c_rms = float(np.sqrt(np.mean(spectrum[centroid_mask] ** 2)))
                 self._centroid_rms = (self._centroid_alpha * self._centroid_rms
