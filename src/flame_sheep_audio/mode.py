@@ -32,7 +32,7 @@ class Mode(Enum):
 
 
 # Transition timing (in frames at ~93fps HOP cadence)
-BEAT_ENTER_FRAMES = 30       # ~0.3s of music detected -> enter beat
+BEAT_ENTER_FRAMES = 90       # ~1s of music detected -> enter beat
 BEAT_EXIT_FRAMES = 900       # ~10s of non-music -> exit beat
 ENERGY_TO_IDLE_FRAMES = 1800 # ~20s of silence -> enter idle
 
