@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+
 import numpy as np
 from collections import deque
 from typing import TYPE_CHECKING
@@ -24,7 +26,27 @@ from ._bands import (
 _scaler = TempoScaler()
 
 
-class FluxBeatDetector:
+class BeatDetectorBase(ABC):
+    """Interface for beat/onset detectors.
+
+    Implementations must:
+      - Accept any bin count via freqs parameter
+      - Return BeatEvents with kind matching configured band names
+      - Support reset_bands() for song changes
+    """
+
+    @abstractmethod
+    def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
+        """Detect beat onsets from a spectrum frame."""
+        ...
+
+    @abstractmethod
+    def reset_bands(self) -> None:
+        """Reset internal state for a song change."""
+        ...
+
+
+class FluxBeatDetector(BeatDetectorBase):
     """Detect beat onsets from spectral flux.
 
     Computes per-band mean flux (weighted or boolean-masked), compares
