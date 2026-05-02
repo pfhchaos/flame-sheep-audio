@@ -120,11 +120,11 @@ class OctaveBankEngine:
 
             if len(masked) >= self._bpo:
                 # More FFT bins than output bins: RMS-average groups
-                chunk_size = len(masked) // self._bpo
-                for b in range(self._bpo):
-                    s = b * chunk_size
-                    e = s + chunk_size if b < self._bpo - 1 else len(masked)
-                    magnitude[out_start + b] = float(np.sqrt(np.mean(masked[s:e] ** 2)))
+                # Vectorized: reshape into (bpo, chunk_size), mean across chunks
+                usable = (len(masked) // self._bpo) * self._bpo
+                reshaped = masked[:usable].reshape(self._bpo, -1)
+                magnitude[out_start:out_start + self._bpo] = np.sqrt(
+                    np.mean(reshaped ** 2, axis=1))
             elif len(masked) > 0:
                 # Fewer FFT bins than output: spread directly
                 magnitude[out_start:out_start + len(masked)] = masked
