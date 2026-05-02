@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+
 import numpy as np
 from dataclasses import dataclass
 from scipy.signal import windows
@@ -17,14 +19,42 @@ _A_WEIGHTS = a_weight_curve(FREQS)
 @dataclass
 class SpectrumFrame:
     """Output of SpectrumEngine — computed once, consumed by all analyzers."""
-    magnitude: np.ndarray    # (N_BINS,) float32, FFT magnitude spectrum
-    flux: np.ndarray         # (N_BINS,) float32, half-wave rectified spectral flux
-    waveform: np.ndarray     # (FFT_SIZE,) float32, raw PCM window
+    magnitude: np.ndarray    # (n_bins,) float32, FFT magnitude spectrum
+    flux: np.ndarray         # (n_bins,) float32, half-wave rectified spectral flux
+    waveform: np.ndarray     # (HOP_SIZE,) float32, raw PCM window
     onset_strength: float = 0.0  # A-weighted flux sum — scalar for tempo tracking
     zcr: float = 0.0             # zero-crossing rate (crossings per sample, speech/music discriminator)
 
 
-class SpectrumEngine:
+class SpectrumEngineBase(ABC):
+    """Interface for spectrum analysis engines.
+
+    Implementations must:
+      - Set n_bins (int) and bin_centers (float32 array) at construction
+      - Return SpectrumFrames with arrays of size n_bins
+      - Handle silence without crashing or producing NaN
+      - Support reset() for state clearing
+    """
+    n_bins: int
+    bin_centers: np.ndarray
+
+    @abstractmethod
+    def push_hop(self, hop: np.ndarray) -> SpectrumFrame:
+        """Process one hop (HOP_SIZE samples) and return a SpectrumFrame."""
+        ...
+
+    @abstractmethod
+    def compute(self, pcm: np.ndarray) -> SpectrumFrame:
+        """Process a full PCM buffer, return the final SpectrumFrame."""
+        ...
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Clear all internal state."""
+        ...
+
+
+class SpectrumEngine(SpectrumEngineBase):
     """Computes FFT magnitude spectrum and spectral flux from raw PCM.
 
     Call compute() once per audio frame. The resulting SpectrumFrame is

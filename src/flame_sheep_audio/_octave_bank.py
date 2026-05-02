@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import windows
 
-from ._spectrum import SpectrumFrame
+from ._spectrum import SpectrumFrame, SpectrumEngineBase
 from ._constants import SAMPLE_RATE, HOP_SIZE
 from ._bands import a_weight_curve
 
@@ -70,7 +70,7 @@ def _build_octave_bank(
     return octaves
 
 
-class OctaveBankEngine:
+class OctaveBankEngine(SpectrumEngineBase):
     """Per-octave FFT bank with log-spaced output bins.
 
     Each octave uses a different FFT size matched to its frequency

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._spectrum import SpectrumFrame
+from ._spectrum import SpectrumFrame, SpectrumEngineBase
 from ._constants import SAMPLE_RATE, HOP_SIZE
 from ._bands import a_weight_curve
 
@@ -21,7 +21,7 @@ except ImportError:
     _HAS_CQT = False
 
 
-class CqtEngine:
+class CqtEngine(SpectrumEngineBase):
     """Real-time Constant Q Transform via rt-cqt's SlidingCqt.
 
     Same push_hop() interface as OctaveBankEngine.

@@ -1,8 +1,9 @@
 """Per-bin magnitude stability for harmonic/percussive separation.
 
-Two implementations:
+Three implementations:
   - _StabilityEMA: lightweight EMA variance tracker (O(N_BINS) per frame)
   - _StabilityMedian: causal median filter HPSS (O(N_BINS * K) per frame)
+  - _StabilityShape: local cosine similarity HPSS (vibrato-tolerant)
 
 The median approach matches librosa's HPSS algorithm but runs causally
 (only past frames). Uses a circular buffer of recent magnitude frames
@@ -14,17 +15,59 @@ MagnitudeStability selects the implementation via config.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+
 import numpy as np
 
 from ._constants import N_BINS
 from .config import cfg
 
 
+class StabilityMethod(ABC):
+    """Interface for per-bin stability / HPSS methods.
+
+    Implementations must:
+      - Accept any bin count (no hardcoded N_BINS)
+      - Handle silence (all-zero magnitude) on any frame including first
+      - Return arrays matching the input magnitude size after update()
+      - Support reset() for engine hotswapping (new bin count after reset)
+    """
+
+    @abstractmethod
+    def update(self, magnitude: np.ndarray) -> None:
+        """Update internal state from a new magnitude frame."""
+        ...
+
+    @abstractmethod
+    def stability_per_bin(self) -> np.ndarray:
+        """Per-bin stability scores, shape matching last update input.
+
+        Returns float32 array, values in [0, 1].
+        1 = harmonic/stable, 0 = percussive/transient.
+        """
+        ...
+
+    @abstractmethod
+    def band_stability(self, mask: np.ndarray) -> float:
+        """Mean stability over masked bins. 0=transient, 1=stable."""
+        ...
+
+    @abstractmethod
+    def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
+        """RMS weighted by stability — only sustained content contributes."""
+        ...
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Reset all state. Must accept different bin count after reset."""
+        ...
+
+
 # ----------------------------------------------------------------
 # EMA-based stability (original, lightweight)
 # ----------------------------------------------------------------
 
-class _StabilityEMA:
+class _StabilityEMA(StabilityMethod):
     """Single-timescale per-bin EMA variance tracker."""
 
     def __init__(self, alpha: float) -> None:
@@ -86,7 +129,7 @@ class _StabilityEMA:
 # Causal median filter HPSS
 # ----------------------------------------------------------------
 
-class _StabilityMedian:
+class _StabilityMedian(StabilityMethod):
     """Causal median-filter harmonic/percussive separation.
 
     Maintains a circular buffer of recent magnitude frames. Each frame:
@@ -177,7 +220,7 @@ class _StabilityMedian:
 # Local shape projection HPSS
 # ----------------------------------------------------------------
 
-class _StabilityShape:
+class _StabilityShape(StabilityMethod):
     """Local spectral shape projection for harmonic/percussive separation.
 
     Maintains an EMA of the normalized spectrum. For each frame, slides
