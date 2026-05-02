@@ -57,8 +57,12 @@ class AudioProcessor:
         if spectrum_engine is not None:
             self._spectrum_engine = spectrum_engine
         else:
-            from ._octave_bank import OctaveBankEngine
-            self._spectrum_engine = OctaveBankEngine()
+            try:
+                from ._cqt_engine import CqtEngine
+                self._spectrum_engine = CqtEngine()
+            except ImportError:
+                from ._octave_bank import OctaveBankEngine
+                self._spectrum_engine = OctaveBankEngine()
         # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._stability = MagnitudeStability()
