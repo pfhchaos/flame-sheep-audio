@@ -54,7 +54,11 @@ class AudioProcessor:
         self._band_config = band_config
 
         self._source = source or PipeWireSource(device=device)
-        self._spectrum_engine = spectrum_engine or SpectrumEngine()
+        if spectrum_engine is not None:
+            self._spectrum_engine = spectrum_engine
+        else:
+            from ._octave_bank import OctaveBankEngine
+            self._spectrum_engine = OctaveBankEngine()
         # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._stability = MagnitudeStability()
@@ -87,7 +91,7 @@ class AudioProcessor:
         self._lock     = threading.Lock()
         self._spectrum: np.ndarray | None = None
         self._stability_bins: np.ndarray | None = None
-        self._waveform = np.zeros(FFT_SIZE, dtype=np.float32)
+        self._waveform: np.ndarray | None = None
         self._centroid = 1000.0
         self._centroid_delta = 0.0
         self._centroid_rms = 0.0
@@ -202,7 +206,10 @@ class AudioProcessor:
                     self._stability_bins = stab_bins.copy()
                 else:
                     self._stability_bins[:] = stab_bins
-                self._waveform[:] = frame.waveform
+                if self._waveform is None or self._waveform.shape != frame.waveform.shape:
+                    self._waveform = frame.waveform.copy()
+                else:
+                    self._waveform[:] = frame.waveform
                 self._centroid = self._energy.centroid
                 self._centroid_delta = self._energy.centroid_delta
                 self._centroid_rms = self._energy.centroid_rms
@@ -294,7 +301,7 @@ class AudioProcessor:
             events=events,
             spectrum=self._spectrum.copy() if self._spectrum is not None else empty.copy(),
             stability=self._stability_bins.copy() if self._stability_bins is not None else empty.copy(),
-            waveform=self._waveform.copy(),
+            waveform=self._waveform.copy() if self._waveform is not None else np.zeros(HOP_SIZE, dtype=np.float32),
             bands=bands,
             centroid=self._centroid,
             centroid_delta=self._centroid_delta,
@@ -358,7 +365,10 @@ class AudioProcessor:
                 self._stability_bins = stab_bins.copy()
             else:
                 self._stability_bins[:] = stab_bins
-            self._waveform[:] = frame.waveform
+            if self._waveform is None or self._waveform.shape != frame.waveform.shape:
+                self._waveform = frame.waveform.copy()
+            else:
+                self._waveform[:] = frame.waveform
             self._centroid = self._energy.centroid
             self._centroid_delta = self._energy.centroid_delta
             self._centroid_rms = self._energy.centroid_rms
@@ -430,7 +440,7 @@ class AudioProcessor:
     def waveform(self) -> np.ndarray:
         """Latest raw PCM window. For GPU texture upload if desired."""
         with self._lock:
-            return self._waveform.copy()
+            return self._waveform.copy() if self._waveform is not None else np.zeros(HOP_SIZE, dtype=np.float32)
 
 
 

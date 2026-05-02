@@ -149,6 +149,25 @@ class OctaveBankEngine:
             zcr=zcr,
         )
 
+    def compute(self, pcm: np.ndarray) -> SpectrumFrame:
+        """Compute from a full PCM buffer.
+
+        Feeds the buffer in HOP_SIZE chunks so low-frequency octaves
+        get enough history. Returns the final frame.
+        """
+        # Feed in HOP_SIZE steps to fill the per-octave buffers
+        pos = 0
+        frame = None
+        while pos < len(pcm):
+            chunk = pcm[pos:pos + HOP_SIZE]
+            if len(chunk) < HOP_SIZE:
+                chunk = np.pad(chunk, (0, HOP_SIZE - len(chunk)))
+            frame = self.push_hop(chunk)
+            pos += HOP_SIZE
+        if frame is None:
+            frame = self.push_hop(np.zeros(HOP_SIZE, dtype=np.float32))
+        return frame
+
     def reset(self) -> None:
         self._prev_spectrum = None
         for buf in self._buffers:
