@@ -182,6 +182,7 @@ class AudioProcessor:
             total_density = sum(self._density.densities.values())
             self._tempo.feed(perc_onset, onset_density=total_density)
             self._scaler.update(self._tempo.effective_bpm)
+            self._energy.update_tempo(self._tempo.effective_bpm)
 
             # Feed density tracker
             for event in events:

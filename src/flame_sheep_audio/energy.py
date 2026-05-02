@@ -27,7 +27,9 @@ class EnergyAnalyzer:
     def __init__(self, alpha: float | None = None,
                  band_config: BandConfig | None = None,
                  freqs: np.ndarray | None = None) -> None:
-        self._alpha = alpha if alpha is not None else cfg.energy.rms_alpha
+        from .tempo_scaler import TempoScaler
+        _ts = TempoScaler()
+        self._alpha = alpha if alpha is not None else _ts.seconds_to_alpha(cfg.energy.rms_smoothing)
         if band_config is None:
             band_config = default_band_config()
         self._band_config = band_config
@@ -51,7 +53,7 @@ class EnergyAnalyzer:
         self._centroid = 1000.0
         self._prev_centroid = 1000.0
         self._centroid_rms = 0.0
-        self._centroid_alpha = cfg.energy.centroid_alpha
+        self._centroid_alpha = _ts.seconds_to_alpha(cfg.energy.centroid_smoothing)
 
         # Section change detection: dual-EMA on normalized centroid + energy
         self._centroid_fast_norm = 0.5
@@ -69,7 +71,8 @@ class EnergyAnalyzer:
 
         # Percussiveness tracking
         self._percussiveness = 0.5
-        self._perc_alpha = cfg.energy.percussiveness_alpha
+        self._novelty_beats = cfg.energy.novelty_window  # in Beats
+        self._perc_alpha = _ts.alpha_for_beats(120.0, self._novelty_beats)
         # Spectral shape distance — alternative percussiveness measure
         self._shape_ema: np.ndarray | None = None  # EMA of normalized spectrum
         self._shape_alpha = self._perc_alpha        # same smoothing as flux perc
@@ -94,8 +97,10 @@ class EnergyAnalyzer:
         alpha = self._alpha
 
         # Per-band RMS and harmonic RMS (unified loop)
-        slow_attack = cfg.energy.slow_attack_alpha
-        slow_release = cfg.energy.slow_release_alpha
+        from .tempo_scaler import TempoScaler
+        _ts = TempoScaler()
+        slow_attack = _ts.seconds_to_alpha(cfg.energy.slow_attack)
+        slow_release = _ts.seconds_to_alpha(cfg.energy.slow_release)
         for name, mask in self._masks.items():
             raw = float(np.sqrt(np.mean(spectrum[mask] ** 2)))
             self._band_rms[name] = alpha * self._band_rms[name] + (1 - alpha) * raw
@@ -245,6 +250,14 @@ class EnergyAnalyzer:
     def centroid_rms(self) -> float:
         """RMS energy around the centroid (±1 octave)."""
         return self._centroid_rms
+
+    def update_tempo(self, bpm: float) -> None:
+        """Update tempo-scaled alphas. Call each frame from processor."""
+        from .tempo_scaler import TempoScaler
+        _ts = TempoScaler()
+        _ts.update(bpm)
+        self._perc_alpha = _ts.alpha(self._novelty_beats)
+        self._shape_alpha = self._perc_alpha
 
     @property
     def percussiveness(self) -> float:

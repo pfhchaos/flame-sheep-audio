@@ -261,9 +261,14 @@ class MagnitudeStability:
                  slow_alpha: float | None = None,
                  method: str | None = None) -> None:
         if fast_alpha is None:
-            fast_alpha = cfg.stability.fast_alpha
+            # Convert Beats to alpha at default 120 BPM
+            from .tempo_scaler import TempoScaler
+            _ts = TempoScaler()
+            fast_alpha = _ts.alpha_for_beats(120.0, cfg.stability.hpss_ema_window)
         if slow_alpha is None:
-            slow_alpha = cfg.stability.slow_alpha
+            from .tempo_scaler import TempoScaler
+            _ts = TempoScaler()
+            slow_alpha = _ts.seconds_to_alpha(cfg.stability.slow_window)
         if method is None:
             method = getattr(cfg.stability, 'method', 'ema')
 

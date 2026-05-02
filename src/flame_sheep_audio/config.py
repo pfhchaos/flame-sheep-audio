@@ -36,18 +36,19 @@ DEFAULTS = {
     },
     'stability': {
         'method': 'median',        # 'ema', 'median' (causal HPSS), or 'shape' (experimental)
-        'fast_alpha': 0.95,
-        'slow_alpha': 0.995,
+        'hpss_ema_window': 0.5,    # beats — 95% decay window for fast stability EMA
+        'slow_window': 2.0,        # seconds — section-level stability
+
         'hpss_time_window': 1.0,   # beats of history for HPSS time median
         'hpss_freq_kernel': 15,    # bins for HPSS frequency median (not tempo-scaled)
     },
     'energy': {
-        'rms_alpha': 0.9,
-        'centroid_alpha': 0.85,
-        'percussiveness_alpha': 0.92,
+        'rms_smoothing': 0.1,              # seconds — band RMS output smoothing
+        'centroid_smoothing': 0.1,         # seconds — spectral centroid smoothing
+        'novelty_window': 0.5,             # beats — spectral novelty EMA window
         'percussiveness_method': 'shape',  # 'shape' (spectral distance) or 'flux' (original)
-        'slow_attack_alpha': 0.995,    # ~2s half-life at 93fps (HOP cadence)
-        'slow_release_alpha': 0.98,    # ~0.5s half-life
+        'slow_attack': 2.0,               # seconds — slow envelope attack
+        'slow_release': 0.5,              # seconds — slow envelope release
     },
     'section': {
         'fast_alpha': 0.995,        # ~2s at HOP cadence
