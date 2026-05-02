@@ -69,6 +69,10 @@ class EnergyAnalyzer:
         self._CENTROID_LOG_RANGE = np.log2(20000.0) - np.log2(20.0)  # ~10 octaves
         self._ENERGY_REF = FFT_SIZE / 2.0
 
+        # Slow envelope alphas (precomputed, not per-frame)
+        self._slow_attack_alpha = _ts.seconds_to_alpha(cfg.energy.slow_attack)
+        self._slow_release_alpha = _ts.seconds_to_alpha(cfg.energy.slow_release)
+
         # Percussiveness tracking
         self._percussiveness = 0.5
         self._novelty_beats = cfg.energy.novelty_window  # in Beats
@@ -97,10 +101,15 @@ class EnergyAnalyzer:
         alpha = self._alpha
 
         # Per-band RMS and harmonic RMS (unified loop)
-        from .tempo_scaler import TempoScaler
-        _ts = TempoScaler()
-        slow_attack = _ts.seconds_to_alpha(cfg.energy.slow_attack)
-        slow_release = _ts.seconds_to_alpha(cfg.energy.slow_release)
+        slow_attack = self._slow_attack_alpha
+        slow_release = self._slow_release_alpha
+        # Pre-compute stability-weighted spectrum once (avoids per-band recompute)
+        if stability is not None:
+            stab_bins = stability.stability_per_bin()
+            weighted_spec_h = spectrum * stab_bins
+        else:
+            stab_bins = None
+            weighted_spec_h = None
         for name, mask in self._masks.items():
             raw = float(np.sqrt(np.mean(spectrum[mask] ** 2)))
             self._band_rms[name] = alpha * self._band_rms[name] + (1 - alpha) * raw
@@ -108,8 +117,9 @@ class EnergyAnalyzer:
             rms = self._band_rms[name]
             sa = slow_attack if rms > self._slow_rms[name] else slow_release
             self._slow_rms[name] = sa * self._slow_rms[name] + (1 - sa) * rms
-            if stability is not None:
-                raw_h = stability.harmonic_rms(spectrum, mask)
+            if weighted_spec_h is not None:
+                band = weighted_spec_h[mask]
+                raw_h = float(np.sqrt(np.mean(band ** 2))) if len(band) > 0 else 0.0
                 self._band_harmonic_rms[name] = (
                     alpha * self._band_harmonic_rms[name] + (1 - alpha) * raw_h)
                 hrms = self._band_harmonic_rms[name]
@@ -147,8 +157,9 @@ class EnergyAnalyzer:
                 raw_c_rms = float(np.sqrt(np.mean(spectrum[centroid_mask] ** 2)))
                 self._centroid_rms = (self._centroid_alpha * self._centroid_rms
                                       + (1 - self._centroid_alpha) * raw_c_rms)
-                if stability is not None:
-                    raw_hc = stability.harmonic_rms(spectrum, centroid_mask)
+                if weighted_spec_h is not None:
+                    hc_band = weighted_spec_h[centroid_mask]
+                    raw_hc = float(np.sqrt(np.mean(hc_band ** 2))) if len(hc_band) > 0 else 0.0
                     self._harmonic_centroid_rms = (
                         self._centroid_alpha * self._harmonic_centroid_rms
                         + (1 - self._centroid_alpha) * raw_hc)

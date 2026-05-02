@@ -31,6 +31,7 @@ class _StabilityEMA:
         self._alpha = alpha
         self._mag_ema: np.ndarray | None = None
         self._mag_var: np.ndarray | None = None
+        self._cached_stability: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
         if self._mag_ema is None:
@@ -40,6 +41,7 @@ class _StabilityEMA:
         self._mag_ema = self._alpha * self._mag_ema + (1 - self._alpha) * magnitude
         diff2 = magnitude - self._mag_ema  # post-update residual (Welford)
         self._mag_var = self._alpha * self._mag_var + (1 - self._alpha) * diff * diff2
+        self._cached_stability = None  # invalidate cache
 
     def band_stability(self, mask: np.ndarray) -> float:
         """0.0 = transient, 1.0 = stable/harmonic."""
@@ -54,10 +56,13 @@ class _StabilityEMA:
 
     def stability_per_bin(self) -> np.ndarray:
         """Per-bin stability scores, 0..1. 1=harmonic, 0=transient."""
+        if self._cached_stability is not None:
+            return self._cached_stability
         if self._mag_var is None:
             return np.full(N_BINS, 0.5, dtype=np.float32)
         cv = np.sqrt(self._mag_var) / (self._mag_ema + 1e-10)
-        return (1.0 / (1.0 + cv)).astype(np.float32)
+        self._cached_stability = (1.0 / (1.0 + cv)).astype(np.float32)
+        return self._cached_stability
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
         """RMS weighted by stability — only sustained content contributes."""
@@ -71,6 +76,7 @@ class _StabilityEMA:
     def reset(self) -> None:
         self._mag_ema = None
         self._mag_var = None
+        self._cached_stability = None
 
 
 # ----------------------------------------------------------------
@@ -96,6 +102,7 @@ class _StabilityMedian:
         self._pos = 0
         self._filled = 0
         self._harmonic_mask: np.ndarray | None = None
+        self._cached_stability: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
         n_bins = len(magnitude)
@@ -127,6 +134,7 @@ class _StabilityMedian:
             h_median / (total + 1e-10),
             1.0,
         ).astype(np.float32)
+        self._cached_stability = None  # invalidate cache
 
     def band_stability(self, mask: np.ndarray) -> float:
         """Mean harmonic mask value in band."""
@@ -136,9 +144,12 @@ class _StabilityMedian:
 
     def stability_per_bin(self) -> np.ndarray:
         """Per-bin harmonic mask, 0..1. 1=harmonic, 0=percussive."""
+        if self._cached_stability is not None:
+            return self._cached_stability
         if self._harmonic_mask is None:
             return np.full(N_BINS, 0.5, dtype=np.float32)
-        return self._harmonic_mask.copy()
+        self._cached_stability = self._harmonic_mask.copy()
+        return self._cached_stability
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
         """RMS weighted by harmonic mask."""
@@ -153,6 +164,7 @@ class _StabilityMedian:
         self._pos = 0
         self._filled = 0
         self._harmonic_mask = None
+        self._cached_stability = None
 
 
 # ----------------------------------------------------------------
