@@ -27,20 +27,9 @@ from .config import cfg
 
 
 # Tempo range (matches old tracker)
+# Defaults (overridden by config if present)
 MIN_BPM = 60
 MAX_BPM = 400
-
-# Analysis parameters
-WINDOW_SECONDS = 8.0        # autocorrelation window length
-UPDATE_INTERVAL = 0.5       # recompute every N seconds
-PRIOR_CENTER = 110.0        # Rayleigh prior center (perceptual preference)
-PRIOR_WIDTH = 1.4           # Rayleigh prior width (std dev in log-BPM space)
-
-# Smoothing
-BPM_SMOOTH_ALPHA = 0.8      # EMA for BPM estimate (0=instant, 1=frozen)
-CONFIDENCE_THRESHOLD = 0.15 # autocorrelation peak must exceed this
-LOCK_THRESHOLD = 0.5
-UNLOCK_THRESHOLD = 0.2
 
 
 class AutocorrelationTempoTracker:
@@ -60,8 +49,18 @@ class AutocorrelationTempoTracker:
         """
         self._hop_duration = hop_duration
 
+        # Read all constants from config
+        window_seconds = cfg.tempo.window_seconds
+        update_interval = cfg.tempo.update_interval
+        prior_center = cfg.tempo.prior_center
+        prior_width = cfg.tempo.prior_width
+        self._SMOOTH_ALPHA = cfg.tempo.smooth_alpha
+        self._CONFIDENCE_THRESHOLD = cfg.tempo.confidence_threshold
+        self._LOCK_THRESHOLD = cfg.tempo.lock_threshold
+        self._UNLOCK_THRESHOLD = cfg.tempo.unlock_threshold
+
         # Ring buffer for onset strength
-        self._buffer_size = int(WINDOW_SECONDS / hop_duration)
+        self._buffer_size = int(window_seconds / hop_duration)
         self._buffer = np.zeros(self._buffer_size, dtype=np.float32)
         self._write_pos = 0
         self._frames_fed = 0
@@ -74,12 +73,11 @@ class AutocorrelationTempoTracker:
         self._lag_bpms = 60.0 / (self._lags * hop_duration)
 
         # Tempo prior: Rayleigh distribution in log-BPM space
-        # Peaks around PRIOR_CENTER, falls off for very slow/fast tempos
-        log_bpm = np.log2(self._lag_bpms / PRIOR_CENTER)
-        self._prior = np.exp(-0.5 * (log_bpm / PRIOR_WIDTH) ** 2)
+        log_bpm = np.log2(self._lag_bpms / prior_center)
+        self._prior = np.exp(-0.5 * (log_bpm / prior_width) ** 2)
 
         # Update cadence
-        self._update_every = max(1, int(UPDATE_INTERVAL / hop_duration))
+        self._update_every = max(1, int(update_interval / hop_duration))
         self._frames_since_update = 0
 
         # State
@@ -194,7 +192,7 @@ class AutocorrelationTempoTracker:
 
         self._raw_bpm = raw_bpm
 
-        if confidence < CONFIDENCE_THRESHOLD and not self._has_estimate:
+        if confidence < self._CONFIDENCE_THRESHOLD and not self._has_estimate:
             return  # not confident enough for first estimate
 
         # Smooth BPM estimate
@@ -212,8 +210,8 @@ class AutocorrelationTempoTracker:
                 # else: keep current octave
             else:
                 # Normal update — EMA smooth
-                self._bpm = (BPM_SMOOTH_ALPHA * self._bpm
-                             + (1 - BPM_SMOOTH_ALPHA) * raw_bpm)
+                self._bpm = (self._SMOOTH_ALPHA * self._bpm
+                             + (1 - self._SMOOTH_ALPHA) * raw_bpm)
 
         # Temporal confidence: how stable have recent estimates been?
         # Only count estimates where spatial confidence was meaningful —
@@ -238,10 +236,10 @@ class AutocorrelationTempoTracker:
         self._confidence = max(confidence, capped_temporal)
 
         # Update last confident BPM
-        if self._confidence >= LOCK_THRESHOLD:
+        if self._confidence >= self._LOCK_THRESHOLD:
             self._last_confident_bpm = self._bpm
             self._locked = True
-        elif self._confidence < UNLOCK_THRESHOLD:
+        elif self._confidence < self._UNLOCK_THRESHOLD:
             self._locked = False
 
         # BPM delta: dual-EMA difference (fast - slow = trend)
