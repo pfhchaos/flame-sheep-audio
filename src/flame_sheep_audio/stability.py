@@ -269,8 +269,14 @@ class MagnitudeStability:
 
         self._method = method
         if method == 'median':
-            kernel_time = getattr(cfg.stability, 'hpss_time_window', 15)
-            kernel_freq = getattr(cfg.stability, 'hpss_freq_kernel', 15)
+            # hpss_time_window is in Beats — convert to frames at default 120 BPM
+            # Uses slowest expected tempo (60 BPM) for buffer sizing so there's
+            # room to adapt. Actual median window adapts via filled count.
+            from .tempo_scaler import TempoScaler
+            _ts = TempoScaler()
+            beats = getattr(cfg.stability, 'hpss_time_window', 1.0)
+            kernel_time = _ts.beats_to_frames(60.0, float(beats))  # size for slow tempo
+            kernel_freq = int(getattr(cfg.stability, 'hpss_freq_kernel', 15))
             self._fast = _StabilityMedian(kernel_time=kernel_time,
                                            kernel_freq=kernel_freq)
         elif method == 'shape':

@@ -73,6 +73,10 @@ class AudioProcessor:
         frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
         self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
 
+        # Tempo-adaptive constant scaler
+        from .tempo_scaler import TempoScaler
+        self._scaler = TempoScaler()
+
         # Mode detection + break detectors (previously in visualization)
         self._mode_detector = ModeDetector()
         self._drop_detector = DropDetector()
@@ -177,6 +181,7 @@ class AudioProcessor:
             # Feed ACF tempo tracker with percussive onset strength
             total_density = sum(self._density.densities.values())
             self._tempo.feed(perc_onset, onset_density=total_density)
+            self._scaler.update(self._tempo.effective_bpm)
 
             # Feed density tracker
             for event in events:
@@ -331,6 +336,7 @@ class AudioProcessor:
         # Feed ACF tempo tracker with percussive onset strength
         total_density = sum(self._density.densities.values())
         self._tempo.feed(perc_onset, onset_density=total_density)
+        self._scaler.update(self._tempo.effective_bpm)
 
         # Feed density tracker
         now = time.perf_counter()

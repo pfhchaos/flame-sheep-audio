@@ -148,11 +148,9 @@ class FluxBeatDetector:
             recent.append(band_flux)
 
             self._frame_count[band] += 1
-            if band == 'kick' and self._bpm > 0:
-                cd = _scaler.beats_to_frames(
-                    self._bpm, cfg.detection.kick_cooldown_beat_fraction)
-            else:
-                cd = self.KICK_COOLDOWN if band == 'kick' else self.COOLDOWN
+            # Unified cooldown: Beats(0.25) = one 16th note, tempo-scaled
+            bpm = self._bpm if self._bpm > 0 else 120.0
+            cd = _scaler.beats_to_frames(bpm, 0.25)
             in_cooldown = (self._frame_count[band]
                            - self._cooldown_frames[band]) < cd
 
