@@ -179,12 +179,16 @@ class AudioProcessor:
             self._stability.update(frame.magnitude)
             self._energy.update(frame.magnitude, frame.flux,
                                 stability=self._stability)
+
+            # Compute percussive flux: weight by instability so harmonic
+            # content doesn't trigger beat events
+            perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
+            perc_flux = frame.flux * perc_weight
+            frame.flux = perc_flux
             events = self._detector.detect(frame)
 
-            # Compute percussive-weighted onset strength (after HPSS split)
-            # Soft weighting: sqrt(1 - stability) preserves more signal than hard mask
-            perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
-            perc_onset = float(np.dot(frame.flux * perc_weight, self._energy._a_weights))
+            # Onset strength for tempo tracker
+            perc_onset = float(np.dot(perc_flux, self._energy._a_weights))
 
             # Feed ACF tempo tracker with percussive onset strength
             total_density = sum(self._density.densities_slow.values())
@@ -340,11 +344,15 @@ class AudioProcessor:
         self._energy.update(frame.magnitude, frame.flux,
                             stability=self._stability)
 
+        # Compute percussive flux: weight by instability so harmonic
+        # content doesn't trigger beat events
+        perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
+        perc_flux = frame.flux * perc_weight
+        frame.flux = perc_flux
         events = self._detector.detect(frame)
 
-        # Compute percussive-weighted onset strength (after HPSS split)
-        perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
-        perc_onset = float(np.dot(frame.flux * perc_weight, self._energy._a_weights))
+        # Onset strength for tempo tracker
+        perc_onset = float(np.dot(perc_flux, self._energy._a_weights))
 
         # Feed ACF tempo tracker with percussive onset strength
         total_density = sum(self._density.densities.values())
