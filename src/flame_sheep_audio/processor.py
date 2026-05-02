@@ -251,14 +251,15 @@ class AudioProcessor:
                 is_idle = self._mode_detector.mode.value == 'idle'
                 self._mode = self._mode_detector.mode.value
 
-                if cfg.breaks.enabled:
+                is_beat_mode = self._mode == 'beat'
+                if cfg.breaks.enabled and is_beat_mode:
                     self._drop_detector.detect(
                         events, self._centroid_rms,
-                        self._bpm, is_idle, self._frame_dt)
+                        self._bpm, not is_beat_mode, self._frame_dt)
                     subbass_rms = self._bands.get('subbass', BandState()).rms
                     self._bass_drop_detector.detect(
                         events, subbass_rms,
-                        self._bpm, is_idle, self._frame_dt)
+                        self._bpm, not is_beat_mode, self._frame_dt)
                     self._break_intensity = max(
                         self._drop_detector.break_intensity,
                         self._bass_drop_detector.break_intensity)
@@ -400,14 +401,15 @@ class AudioProcessor:
             is_idle = self._mode_detector.mode.value == 'idle'
             self._mode = self._mode_detector.mode.value
 
-            if cfg.breaks.enabled:
+            is_beat_mode = self._mode == 'beat'
+            if cfg.breaks.enabled and is_beat_mode:
                 self._drop_detector.detect(
                     events, self._centroid_rms,
-                    self._bpm, is_idle, self._frame_dt)
+                    self._bpm, not is_beat_mode, self._frame_dt)
                 subbass_rms = self._bands.get('subbass', BandState()).rms
                 self._bass_drop_detector.detect(
                     events, subbass_rms,
-                    self._bpm, is_idle, self._frame_dt)
+                    self._bpm, not is_beat_mode, self._frame_dt)
                 self._break_intensity = max(
                     self._drop_detector.break_intensity,
                     self._bass_drop_detector.break_intensity)
