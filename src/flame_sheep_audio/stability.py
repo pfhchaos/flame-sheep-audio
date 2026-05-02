@@ -29,6 +29,7 @@ class _StabilityEMA:
 
     def __init__(self, alpha: float) -> None:
         self._alpha = alpha
+        self._n_bins: int = 0
         self._mag_ema: np.ndarray | None = None
         self._mag_var: np.ndarray | None = None
         self._cached_stability: np.ndarray | None = None
@@ -75,6 +76,7 @@ class _StabilityEMA:
         return float(np.sqrt(np.mean(band ** 2)))
 
     def reset(self) -> None:
+        self._n_bins = 0
         self._mag_ema = None
         self._mag_var = None
         self._cached_stability = None
@@ -163,6 +165,7 @@ class _StabilityMedian:
         return float(np.sqrt(np.mean(band ** 2)))
 
     def reset(self) -> None:
+        self._n_bins = 0
         self._buf = None
         self._pos = 0
         self._filled = 0
@@ -194,6 +197,8 @@ class _StabilityShape:
         self._n_bins: int = 0
 
     def update(self, magnitude: np.ndarray) -> None:
+        if self._n_bins == 0:
+            self._n_bins = len(magnitude)
         spec_norm = np.linalg.norm(magnitude)
         if spec_norm < 1e-10:
             return
@@ -201,7 +206,6 @@ class _StabilityShape:
         normalized = magnitude / spec_norm
 
         if self._shape_ema is None:
-            self._n_bins = len(magnitude)
             self._shape_ema = normalized.copy()
             self._harmonic_mask = np.full(self._n_bins, 0.5, dtype=np.float32)
             return
@@ -257,6 +261,7 @@ class _StabilityShape:
         return float(np.sqrt(np.mean(band ** 2)))
 
     def reset(self) -> None:
+        self._n_bins = 0
         self._shape_ema = None
         self._harmonic_mask = None
 
