@@ -26,11 +26,13 @@ class BassDropDetector:
     """
 
     @property
-    def QUIET_THRESHOLD_FRAMES(self) -> int: return cfg.breaks.bass_quiet_threshold_frames
+    def QUIET_THRESHOLD_FRAMES(self) -> int:
+        from .tempo_scaler import TempoScaler
+        return TempoScaler().beats_to_frames(self._bpm or 120.0, cfg.breaks.bass_activation_window)
     @property
     def MIN_KICKS_BEFORE_DROP(self) -> int: return cfg.breaks.min_kicks_before_break
     @property
-    def BREAK_COOLDOWN(self) -> float: return cfg.breaks.cooldown_seconds
+    def BREAK_COOLDOWN(self) -> float: return cfg.breaks.cooldown
     @property
     def SUBBASS_DROP_RATIO(self) -> float: return cfg.breaks.subbass_drop_ratio
 
@@ -42,6 +44,7 @@ class BassDropDetector:
         self._warmup_frames = 0
         self.breaking = False
         self._break_start_frame = 0
+        self._bpm: float = 120.0
 
     def reset(self) -> None:
         """Reset state — call on song change."""
@@ -54,15 +57,8 @@ class BassDropDetector:
 
     def detect(self, events: list[BeatEvent], subbass_rms: float,
                bpm: float, drifting: bool, dt: float) -> None:
-        """Update break state. Read .breaking for current state.
-
-        Args:
-            events: beat events this frame
-            subbass_rms: current 20-200Hz RMS energy (snap.rms)
-            bpm: current tempo estimate (0 if unknown)
-            drifting: True if drift mode is active
-            dt: frame time delta
-        """
+        """Update break state. Read .breaking for current state."""
+        self._bpm = bpm if bpm > 0 else 120.0
         self._subbass_avg = 0.97 * self._subbass_avg + 0.03 * subbass_rms
         self._warmup_frames += 1
 

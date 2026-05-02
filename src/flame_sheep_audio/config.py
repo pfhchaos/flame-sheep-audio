@@ -25,14 +25,12 @@ CONFIG_PATH = Path.home() / '.config' / 'flame-sheep' / 'audio.toml'
 
 DEFAULTS = {
     'detection': {
-        'base_threshold': 1.5,
-        'kick_threshold': 3.5,
-        'cooldown_frames': 12,
-        'kick_cooldown_frames': 8,
-        'kick_cooldown_beat_fraction': 0.4,
-        'stability_scaling': 1.0,
-        'sharpness': 3.0,
-        'min_flux': 1e-7,
+        'base_threshold': 1.5,          # flux multiplier (future: Percentile)
+        'kick_threshold': 3.5,          # kick flux multiplier (future: Percentile)
+        'cooldown': 0.25,               # beats — unified cooldown (1/16th note)
+        'stability_scaling': 1.0,       # stability → threshold scaling (raw float)
+        'sharpness': 3.0,              # attack sharpness gate (future: Percentile)
+        'min_flux': 1e-7,              # absolute noise floor
     },
     'stability': {
         'method': 'median',        # 'ema', 'median' (causal HPSS), or 'shape' (experimental)
@@ -77,12 +75,12 @@ DEFAULTS = {
     },
     'breaks': {
         'enabled': True,
-        'quiet_threshold_frames': 60,
-        'bass_quiet_threshold_frames': 45,
-        'drop_energy_ratio': 0.15,
-        'subbass_drop_ratio': 0.10,
-        'min_kicks_before_break': 8,
-        'cooldown_seconds': 15.0,
+        'activation_window': 2.0,           # beats — quiet time before break activates
+        'bass_activation_window': 1.5,      # beats — sub-bass quiet time
+        'drop_energy_ratio': 0.15,          # ratio (future: Percentile)
+        'subbass_drop_ratio': 0.10,         # ratio (future: Percentile)
+        'min_kicks_before_break': 8,        # count — prevent false triggers on intros
+        'cooldown': 15.0,                   # seconds — time after break ends
     },
     'adaptive': {
         'enabled': False,
