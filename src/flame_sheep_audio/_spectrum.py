@@ -64,7 +64,7 @@ class SpectrumEngine:
             magnitude=magnitude,
             flux=flux,
             waveform=pcm.copy(),
-            onset_strength=float(np.dot(flux, _A_WEIGHTS)),
+            # onset_strength computed downstream after HPSS split
             zcr=zcr,
         )
 

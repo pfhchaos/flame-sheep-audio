@@ -169,9 +169,14 @@ class AudioProcessor:
                                 stability=self._stability)
             events = self._detector.detect(frame)
 
-            # Feed ACF tempo tracker with onset strength + total density
+            # Compute percussive-weighted onset strength (after HPSS split)
+            # Soft weighting: sqrt(1 - stability) preserves more signal than hard mask
+            perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
+            perc_onset = float(np.dot(frame.flux * perc_weight, self._energy._a_weights))
+
+            # Feed ACF tempo tracker with percussive onset strength
             total_density = sum(self._density.densities.values())
-            self._tempo.feed(frame.onset_strength, onset_density=total_density)
+            self._tempo.feed(perc_onset, onset_density=total_density)
 
             # Feed density tracker
             for event in events:
@@ -319,9 +324,13 @@ class AudioProcessor:
 
         events = self._detector.detect(frame)
 
-        # Feed ACF tempo tracker
+        # Compute percussive-weighted onset strength (after HPSS split)
+        perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
+        perc_onset = float(np.dot(frame.flux * perc_weight, self._energy._a_weights))
+
+        # Feed ACF tempo tracker with percussive onset strength
         total_density = sum(self._density.densities.values())
-        self._tempo.feed(frame.onset_strength, onset_density=total_density)
+        self._tempo.feed(perc_onset, onset_density=total_density)
 
         # Feed density tracker
         now = time.perf_counter()

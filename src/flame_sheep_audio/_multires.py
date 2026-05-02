@@ -104,7 +104,7 @@ class MultiResSpectrumEngine:
             magnitude=magnitude,
             flux=flux,
             waveform=pcm[-self._fft_size:].copy(),
-            onset_strength=float(np.dot(flux, self._a_weights)),
+            # onset_strength computed downstream after HPSS split
             zcr=zcr,
         )
 
