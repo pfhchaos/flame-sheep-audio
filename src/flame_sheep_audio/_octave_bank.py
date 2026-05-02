@@ -20,6 +20,13 @@ from ._spectrum import SpectrumFrame
 from ._constants import SAMPLE_RATE, HOP_SIZE
 from ._bands import a_weight_curve
 
+# Optional C++ acceleration — falls back to pure Python if not built.
+try:
+    from ._native import OctaveBankNative
+    _HAS_NATIVE = True
+except ImportError:
+    _HAS_NATIVE = False
+
 
 def _build_octave_bank(
     sr: int = SAMPLE_RATE,
@@ -75,31 +82,52 @@ class OctaveBankEngine:
     def __init__(self, n_octaves: int = 9, bins_per_octave: int = 12,
                  fmin: float = 32.7) -> None:
         self._bpo = bins_per_octave
-        self._octaves = _build_octave_bank(
-            n_octaves=n_octaves, bins_per_octave=bins_per_octave, fmin=fmin)
+        self._n_octaves = n_octaves
+        self._fmin = fmin
         self.n_bins = n_octaves * bins_per_octave
 
-        # Per-octave sliding buffers
-        self._buffers = [np.zeros(o['fft_size'], dtype=np.float32)
-                         for o in self._octaves]
+        # Use C++ engine if available, otherwise pure Python
+        if _HAS_NATIVE:
+            self._native = OctaveBankNative(SAMPLE_RATE, HOP_SIZE,
+                                            n_octaves, bins_per_octave, fmin)
+        else:
+            self._native = None
+            self._octaves = _build_octave_bank(
+                n_octaves=n_octaves, bins_per_octave=bins_per_octave, fmin=fmin)
+            self._buffers = [np.zeros(o['fft_size'], dtype=np.float32)
+                             for o in self._octaves]
+            self._prev_spectrum: np.ndarray | None = None
 
-        # Build bin center frequencies
+        # Build bin center frequencies (needed by both paths for A-weighting)
         self.bin_centers = np.zeros(self.n_bins, dtype=np.float32)
-        for oct_idx, o in enumerate(self._octaves):
+        for oct_idx in range(n_octaves):
+            f_lo = fmin * (2 ** oct_idx)
             for b in range(bins_per_octave):
-                # Log-spaced within octave
                 frac = b / bins_per_octave
                 self.bin_centers[oct_idx * bins_per_octave + b] = \
-                    o['f_lo'] * (2 ** frac)
+                    f_lo * (2 ** frac)
 
         # A-weighting for onset strength
         self._a_weights = a_weight_curve(self.bin_centers)
 
-        # Previous magnitude for flux computation
-        self._prev_spectrum: np.ndarray | None = None
-
     def push_hop(self, hop: np.ndarray) -> SpectrumFrame:
         """Slide buffers and compute per-octave FFTs."""
+        if self._native is not None:
+            return self._push_hop_native(hop)
+        return self._push_hop_python(hop)
+
+    def _push_hop_native(self, hop: np.ndarray) -> SpectrumFrame:
+        """Fast path: C++ does FFTs + rebin + flux + ZCR in one call."""
+        magnitude, flux, zcr = self._native.push_hop(hop)
+        return SpectrumFrame(
+            magnitude=magnitude,
+            flux=flux,
+            waveform=hop.copy(),
+            zcr=zcr,
+        )
+
+    def _push_hop_python(self, hop: np.ndarray) -> SpectrumFrame:
+        """Pure Python fallback."""
         n = len(hop)
         magnitude = np.zeros(self.n_bins, dtype=np.float32)
 
@@ -145,7 +173,6 @@ class OctaveBankEngine:
             magnitude=magnitude,
             flux=flux,
             waveform=hop.copy(),
-            # onset_strength computed downstream after HPSS split
             zcr=zcr,
         )
 
@@ -169,6 +196,9 @@ class OctaveBankEngine:
         return frame
 
     def reset(self) -> None:
-        self._prev_spectrum = None
-        for buf in self._buffers:
-            buf[:] = 0.0
+        if self._native is not None:
+            self._native.reset()
+        else:
+            self._prev_spectrum = None
+            for buf in self._buffers:
+                buf[:] = 0.0
