@@ -35,6 +35,7 @@ class _StabilityEMA:
 
     def update(self, magnitude: np.ndarray) -> None:
         if self._mag_ema is None:
+            self._n_bins = len(magnitude)
             self._mag_ema = np.zeros_like(magnitude)
             self._mag_var = np.zeros_like(magnitude)
         diff = magnitude - self._mag_ema
@@ -59,7 +60,7 @@ class _StabilityEMA:
         if self._cached_stability is not None:
             return self._cached_stability
         if self._mag_var is None:
-            return np.full(N_BINS, 0.5, dtype=np.float32)
+            return np.full(self._n_bins or N_BINS, 0.5, dtype=np.float32)
         cv = np.sqrt(self._mag_var) / (self._mag_ema + 1e-10)
         self._cached_stability = (1.0 / (1.0 + cv)).astype(np.float32)
         return self._cached_stability
@@ -101,12 +102,14 @@ class _StabilityMedian:
         self._buf: np.ndarray | None = None
         self._pos = 0
         self._filled = 0
+        self._n_bins: int = 0
         self._harmonic_mask: np.ndarray | None = None
         self._cached_stability: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
         n_bins = len(magnitude)
         if self._buf is None:
+            self._n_bins = n_bins
             self._buf = np.zeros((self._kt, n_bins), dtype=np.float32)
             self._harmonic_mask = np.full(n_bins, 0.5, dtype=np.float32)
         # Write new frame to circular buffer
@@ -147,7 +150,7 @@ class _StabilityMedian:
         if self._cached_stability is not None:
             return self._cached_stability
         if self._harmonic_mask is None:
-            return np.full(N_BINS, 0.5, dtype=np.float32)
+            return np.full(self._n_bins or N_BINS, 0.5, dtype=np.float32)
         self._cached_stability = self._harmonic_mask.copy()
         return self._cached_stability
 
@@ -187,7 +190,8 @@ class _StabilityShape:
         self._alpha = alpha
         self._kernel = kernel
         self._shape_ema: np.ndarray | None = None
-        self._harmonic_mask = np.full(N_BINS, 0.5, dtype=np.float32)
+        self._harmonic_mask: np.ndarray | None = None
+        self._n_bins: int = 0
 
     def update(self, magnitude: np.ndarray) -> None:
         spec_norm = np.linalg.norm(magnitude)
@@ -197,7 +201,9 @@ class _StabilityShape:
         normalized = magnitude / spec_norm
 
         if self._shape_ema is None:
+            self._n_bins = len(magnitude)
             self._shape_ema = normalized.copy()
+            self._harmonic_mask = np.full(self._n_bins, 0.5, dtype=np.float32)
             return
 
         # Sliding window cosine distance between current and EMA
@@ -221,8 +227,9 @@ class _StabilityShape:
         self._harmonic_mask = np.clip(cos_sim, 0.0, 1.0).astype(np.float32)
 
         # Silence: if both patches are near-zero, default to harmonic
+        n = len(magnitude)
         silent_bins = (cur_norms < 1e-8) & (ema_norms < 1e-8)
-        self._harmonic_mask[silent_bins[:N_BINS]] = 1.0
+        self._harmonic_mask[silent_bins[:n]] = 1.0
 
         # Update shape EMA (re-normalize)
         raw_ema = self._alpha * self._shape_ema + (1 - self._alpha) * normalized
@@ -233,15 +240,17 @@ class _StabilityShape:
             self._shape_ema = normalized.copy()
 
     def band_stability(self, mask: np.ndarray) -> float:
-        if not mask.any():
+        if not mask.any() or self._harmonic_mask is None:
             return 1.0
         return float(self._harmonic_mask[mask].mean())
 
     def stability_per_bin(self) -> np.ndarray:
+        if self._harmonic_mask is None:
+            return np.full(self._n_bins or N_BINS, 0.5, dtype=np.float32)
         return self._harmonic_mask.copy()
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
-        if not mask.any():
+        if not mask.any() or self._harmonic_mask is None:
             return 0.0
         weighted = magnitude * self._harmonic_mask
         band = weighted[mask]
@@ -249,7 +258,7 @@ class _StabilityShape:
 
     def reset(self) -> None:
         self._shape_ema = None
-        self._harmonic_mask[:] = 0.5
+        self._harmonic_mask = None
 
 
 # ----------------------------------------------------------------
