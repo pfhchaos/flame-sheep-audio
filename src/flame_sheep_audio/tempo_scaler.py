@@ -1,72 +1,136 @@
-"""Tempo-aware constant scaling via sigmoid mapping.
+"""Tempo-adaptive constant scaling.
 
-Converts fixed constants into tempo-dependent values. Slow music gets
-slow values, fast music gets fast values, with a smooth S-curve
-transition centered at a configurable midpoint (default 120 BPM).
+Converts musical durations (in beats) to frame counts and EMA alphas
+based on the current tempo. Constants expressed in beats adapt
+automatically when tempo changes.
 
-Each constant family can have its own steepness parameter controlling
-how sharp the slow→fast transition is.
+Two unit types prevent mixing up beats, frames, and alphas:
+  Beats(0.4)     — 40% of one beat (musical time)
+  Percentile(90) — 90th percentile of recent signal
+
+TempoScaler converts Beats to frames or alphas each tick, smoothing
+tempo changes to avoid snapping.
 
 Usage:
     scaler = TempoScaler()
-    # At 120 BPM: returns midpoint between slow and fast
-    # At 60 BPM: returns ~slow_val
-    # At 240 BPM: returns ~fast_val
-    cooldown = scaler.scale(effective_bpm, slow_val=20, fast_val=4)
 
-    # Convert "N beats" to frames at current tempo
-    frames = scaler.beats_to_frames(effective_bpm, beats=2.0)
+    # Each frame (in audio loop):
+    scaler.update(effective_bpm)
 
-    # Get an EMA alpha for "N beats of memory" at current tempo
-    alpha = scaler.alpha_for_beats(effective_bpm, beats=2.0)
+    # Convert beat-relative constants:
+    cooldown = scaler.frames(Beats(0.4))    # frames for 40% of a beat
+    alpha = scaler.alpha(Beats(1.0))        # EMA alpha for 1-beat 95% decay
 """
 
 from __future__ import annotations
 
-import math
+import numpy as np
 
-from ._constants import HOP_SIZE, SAMPLE_RATE
+from ._constants import SAMPLE_RATE, HOP_SIZE
 
-# Precompute for beats_to_frames
+
+# Frames per hop at our sample rate
 _FRAMES_PER_SECOND = SAMPLE_RATE / HOP_SIZE
 
 
+class Beats(float):
+    """A duration measured in beats, not seconds or frames.
+
+    Used in config to express tempo-relative constants:
+        cooldown = Beats(0.4)       # 40% of one beat
+        stability_window = Beats(1) # one beat until 95% decay
+    """
+    pass
+
+
+class Percentile(float):
+    """A threshold expressed as a percentile of recent signal distribution.
+
+    Used in config to express headroom-adaptive thresholds:
+        threshold = Percentile(90)  # fire at 90th percentile of recent flux
+    """
+    pass
+
+
 class TempoScaler:
-    """Maps constants between slow/fast values via sigmoid of BPM."""
+    """Converts beat-relative constants to frame counts and EMA alphas.
 
-    def __init__(self, midpoint: float = 120.0, steepness: float = 0.03):
-        self.midpoint = midpoint
-        self.steepness = steepness
+    Updates each frame with the current effective_bpm. Outputs
+    change smoothly — no snapping on tempo changes.
+    """
 
-    def sigmoid(self, bpm: float) -> float:
-        """Raw sigmoid: 0 at slow tempos, 1 at fast tempos."""
-        return 1.0 / (1.0 + math.exp(-self.steepness * (bpm - self.midpoint)))
+    def __init__(self, smooth_alpha: float = 0.95) -> None:
+        self._bpm: float = 120.0
+        self._beat_frames: float = _FRAMES_PER_SECOND * 60.0 / 120.0
+        self._smooth_alpha = smooth_alpha
 
-    def scale(self, bpm: float, slow_val: float, fast_val: float,
-              steepness: float | None = None) -> float:
-        """Blend between slow_val and fast_val based on tempo.
+    def update(self, effective_bpm: float) -> None:
+        """Update with current tempo. Call once per frame."""
+        if effective_bpm <= 0:
+            return
+        target = _FRAMES_PER_SECOND * 60.0 / effective_bpm
+        self._beat_frames = (self._smooth_alpha * self._beat_frames
+                             + (1 - self._smooth_alpha) * target)
+        self._bpm = effective_bpm
+
+    @property
+    def beat_frames(self) -> float:
+        """Current frames per beat (smoothed)."""
+        return self._beat_frames
+
+    @property
+    def bpm(self) -> float:
+        """Current BPM being used for scaling."""
+        return self._bpm
+
+    def frames(self, beats: Beats | float) -> int:
+        """Convert a duration in beats to frame count.
+
+        Beats(1.0) at 120 BPM ≈ 47 frames
+        Beats(0.4) at 120 BPM ≈ 19 frames
+        """
+        return max(1, int(round(float(beats) * self._beat_frames)))
+
+    def alpha(self, beats: Beats | float) -> float:
+        """Convert a decay window in beats to an EMA alpha.
+
+        The alpha is computed so that after `beats` beats worth of
+        frames, 95% of the original value has decayed (5% remains).
+
+        Beats(1.0) at 120 BPM → alpha ≈ 0.936 (47 frames to 95% decay)
+        Beats(1.0) at 60 BPM  → alpha ≈ 0.968 (93 frames to 95% decay)
+        """
+        n_frames = max(1.0, float(beats) * self._beat_frames)
+        # alpha^n = 0.05 → alpha = 0.05^(1/n)
+        return float(np.power(0.05, 1.0 / n_frames))
+
+    def blend(self, slow_val: float, fast_val: float,
+              steepness: float = 0.03, midpoint: float = 120.0) -> float:
+        """Sigmoid blend between slow and fast values based on current tempo.
+
+        Smooth S-curve: returns ~slow_val at low BPM, ~fast_val at high BPM,
+        midpoint between them at `midpoint` BPM. Continuous and differentiable.
 
         Args:
-            bpm: effective BPM
             slow_val: value at very slow tempos
             fast_val: value at very fast tempos
-            steepness: override instance steepness for this call
+            steepness: how sharp the transition is (0.03 = gentle)
+            midpoint: BPM where the blend is 50/50 (default 120)
         """
-        k = steepness if steepness is not None else self.steepness
-        t = 1.0 / (1.0 + math.exp(-k * (bpm - self.midpoint)))
+        import math
+        t = 1.0 / (1.0 + math.exp(-steepness * (self._bpm - midpoint)))
         return slow_val + (fast_val - slow_val) * t
 
+    # --- Convenience for non-Beats usage ---
+
     def beats_to_frames(self, bpm: float, beats: float) -> int:
-        """Convert a duration in beats to frames at current tempo."""
+        """Static conversion without internal state. For eval harnesses."""
         if bpm <= 0:
-            bpm = self.midpoint
-        seconds = beats * 60.0 / bpm
-        return max(1, int(seconds * _FRAMES_PER_SECOND))
+            bpm = 120.0
+        beat_frames = _FRAMES_PER_SECOND * 60.0 / bpm
+        return max(1, int(round(beats * beat_frames)))
 
     def alpha_for_beats(self, bpm: float, beats: float) -> float:
-        """EMA alpha that gives ~N beats of memory at current tempo.
-
-        alpha = 1 - 1/(beats * frames_per_beat)
-        """
+        """Static conversion without internal state. For eval harnesses."""
         frames = self.beats_to_frames(bpm, beats)
-        return max(0.5, min(0.999, 1.0 - 1.0 / frames))
+        return float(np.power(0.05, 1.0 / max(1, frames)))
