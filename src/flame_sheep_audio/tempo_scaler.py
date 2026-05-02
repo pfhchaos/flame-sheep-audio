@@ -43,6 +43,17 @@ class Beats(float):
     pass
 
 
+class Seconds(float):
+    """A duration in wall-clock seconds. Not tempo-scaled.
+
+    Used for constants that relate to perception or physics, not
+    musical structure:
+        stability.slow_window = Seconds(2.0)
+        energy.slow_attack = Seconds(2.0)
+    """
+    pass
+
+
 class Percentile(float):
     """A threshold expressed as a percentile of recent signal distribution.
 
@@ -103,6 +114,18 @@ class TempoScaler:
         n_frames = max(1.0, float(beats) * self._beat_frames)
         # alpha^n = 0.05 → alpha = 0.05^(1/n)
         return float(np.power(0.05, 1.0 / n_frames))
+
+    def seconds_to_alpha(self, seconds: Seconds | float) -> float:
+        """Convert a duration in seconds to an EMA alpha (95% decay).
+
+        Not tempo-dependent — uses fixed frame rate.
+        """
+        n_frames = max(1.0, float(seconds) * _FRAMES_PER_SECOND)
+        return float(np.power(0.05, 1.0 / n_frames))
+
+    def seconds_to_frames(self, seconds: Seconds | float) -> int:
+        """Convert seconds to frame count. Not tempo-dependent."""
+        return max(1, int(round(float(seconds) * _FRAMES_PER_SECOND)))
 
     def blend(self, slow_val: float, fast_val: float,
               steepness: float = 0.03, midpoint: float = 120.0) -> float:

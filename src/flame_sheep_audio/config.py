@@ -38,8 +38,8 @@ DEFAULTS = {
         'method': 'median',        # 'ema', 'median' (causal HPSS), or 'shape' (experimental)
         'fast_alpha': 0.95,
         'slow_alpha': 0.995,
-        'median_kernel_time': 15,  # frames (~160ms at HOP cadence)
-        'median_kernel_freq': 15,  # bins (~350 Hz)
+        'hpss_time_window': 1.0,   # beats of history for HPSS time median
+        'hpss_freq_kernel': 15,    # bins for HPSS frequency median (not tempo-scaled)
     },
     'energy': {
         'rms_alpha': 0.9,

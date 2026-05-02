@@ -269,8 +269,8 @@ class MagnitudeStability:
 
         self._method = method
         if method == 'median':
-            kernel_time = getattr(cfg.stability, 'median_kernel_time', 31)
-            kernel_freq = getattr(cfg.stability, 'median_kernel_freq', 31)
+            kernel_time = getattr(cfg.stability, 'hpss_time_window', 15)
+            kernel_freq = getattr(cfg.stability, 'hpss_freq_kernel', 15)
             self._fast = _StabilityMedian(kernel_time=kernel_time,
                                            kernel_freq=kernel_freq)
         elif method == 'shape':
