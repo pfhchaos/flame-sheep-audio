@@ -60,8 +60,8 @@ class EnergyAnalyzer:
         self._centroid_slow_norm = 0.5
         self._energy_fast_norm = 0.0
         self._energy_slow_norm = 0.0
-        self._SECTION_FAST_ALPHA = cfg.section.fast_alpha
-        self._SECTION_SLOW_ALPHA = cfg.section.slow_alpha
+        self._SECTION_FAST_ALPHA = _ts.seconds_to_alpha(cfg.section.fast_window)
+        self._SECTION_SLOW_ALPHA = _ts.seconds_to_alpha(cfg.section.slow_window)
         self._SECTION_W_CENTROID = cfg.section.weight_centroid
         self._SECTION_W_ENERGY = cfg.section.weight_energy
         # Normalization constants

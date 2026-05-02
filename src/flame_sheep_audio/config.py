@@ -51,15 +51,16 @@ DEFAULTS = {
         'slow_release': 0.5,              # seconds — slow envelope release
     },
     'section': {
-        'fast_alpha': 0.995,        # ~2s at HOP cadence
-        'slow_alpha': 0.9993,       # ~15s at HOP cadence
+        'fast_window': 2.0,         # seconds — fast EMA for section change
+        'slow_window': 15.0,        # seconds — slow EMA for section change
         'weight_centroid': 1.0,     # tunable axis coefficient
         'weight_energy': 1.0,       # tunable axis coefficient
     },
     'density': {
-        'window': 1.0,
-        'delta_window': 2.0,
-        'alpha': 0.9,
+        'window': 1.0,              # seconds — onset counting window (already in seconds)
+        'delta_window': 2.0,        # seconds — density delta lookback (already in seconds)
+        'fast_smoothing': 0.1,      # seconds — density output for visualization
+        'slow_smoothing': 2.0,      # seconds — density for tempo tracker
     },
     'tempo': {
         'min_bpm': 60,

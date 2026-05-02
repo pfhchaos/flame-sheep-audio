@@ -179,7 +179,7 @@ class AudioProcessor:
             perc_onset = float(np.dot(frame.flux * perc_weight, self._energy._a_weights))
 
             # Feed ACF tempo tracker with percussive onset strength
-            total_density = sum(self._density.densities.values())
+            total_density = sum(self._density.densities_slow.values())
             self._tempo.feed(perc_onset, onset_density=total_density)
             self._scaler.update(self._tempo.effective_bpm)
             self._energy.update_tempo(self._tempo.effective_bpm)
