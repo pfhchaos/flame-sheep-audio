@@ -66,6 +66,11 @@ class AudioProcessor:
         # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._stability = MagnitudeStability()
+
+        # HPSS transforms — use apply() with shared stability mask
+        from .hpss import PercussiveTransform
+        self._percussive = PercussiveTransform()
+
         self._detector = FluxBeatDetector(adaptive=adaptive, sharpness=sharpness,
                                           stability=self._stability,
                                           band_config=band_config,
@@ -180,15 +185,13 @@ class AudioProcessor:
             self._energy.update(frame.magnitude, frame.flux,
                                 stability=self._stability)
 
-            # Compute percussive flux: weight by instability so harmonic
-            # content doesn't trigger beat events
-            perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
-            perc_flux = frame.flux * perc_weight
-            frame.flux = perc_flux
-            events = self._detector.detect(frame)
+            # HPSS: percussive transform for beat detection + tempo
+            mask = self._stability.stability_per_bin()
+            perc_frame = self._percussive.apply(frame, mask)
+            events = self._detector.detect(perc_frame)
 
             # Onset strength for tempo tracker
-            perc_onset = float(np.dot(perc_flux, self._energy._a_weights))
+            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
 
             # Feed ACF tempo tracker with percussive onset strength
             total_density = sum(self._density.densities_slow.values())
@@ -344,15 +347,13 @@ class AudioProcessor:
         self._energy.update(frame.magnitude, frame.flux,
                             stability=self._stability)
 
-        # Compute percussive flux: weight by instability so harmonic
-        # content doesn't trigger beat events
-        perc_weight = np.sqrt(1.0 - self._stability.stability_per_bin())
-        perc_flux = frame.flux * perc_weight
-        frame.flux = perc_flux
-        events = self._detector.detect(frame)
+        # HPSS: percussive transform for beat detection + tempo
+        mask = self._stability.stability_per_bin()
+        perc_frame = self._percussive.apply(frame, mask)
+        events = self._detector.detect(perc_frame)
 
         # Onset strength for tempo tracker
-        perc_onset = float(np.dot(perc_flux, self._energy._a_weights))
+        perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
 
         # Feed ACF tempo tracker with percussive onset strength
         total_density = sum(self._density.densities.values())
