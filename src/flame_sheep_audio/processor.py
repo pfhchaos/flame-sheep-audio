@@ -71,10 +71,10 @@ class AudioProcessor:
         from .hpss import PercussiveTransform
         self._percussive = PercussiveTransform()
 
-        self._detector = FluxBeatDetector(adaptive=adaptive, sharpness=sharpness,
-                                          stability=self._stability,
-                                          band_config=band_config,
-                                          freqs=freqs)
+        from .beat_detector import PercentileBeatDetector
+        self._detector = PercentileBeatDetector(percentile=95.0,
+                                                band_config=band_config,
+                                                freqs=freqs)
         self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
         self._density = OnsetDensityTracker(band_config=band_config)
 
