@@ -86,12 +86,12 @@ class AudioProcessor:
         self._threaded = not isinstance(self._source, FeedSource)
 
         # Tempo tracker: prefer BTrack (real-time beat tracker) over ACF
+        frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
         try:
             from .tempo_btrack import BTrackTempoTracker
             self._tempo = BTrackTempoTracker(hop_size=HOP_SIZE, sample_rate=SAMPLE_RATE)
             self._tempo_has_audio = True
         except ImportError:
-            frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
             self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
             self._tempo_has_audio = False
 
