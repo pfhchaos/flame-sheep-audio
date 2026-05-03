@@ -120,7 +120,7 @@ class PercivalTempoTracker(TempoTrackerBase):
 
         # Gaussian accumulator histogram (in lag space)
         self._histogram = np.zeros(self._max_lag + 1, dtype=np.float64)
-        self._hist_decay = 0.95  # per-update decay
+        self._hist_decay = 0.99  # per-update decay (~25s half-life)
 
         # Output state
         self._bpm = float(cfg.tempo.default_bpm)
@@ -200,63 +200,38 @@ class PercivalTempoTracker(TempoTrackerBase):
         if not candidates:
             return
 
-        # Score candidates via cross-correlation with pulse trains
-        # Collect raw SC_x and SC_v per candidate, then normalize (eq. 11)
-        raw_scores = []
-        for _, lag in candidates:
-            sc_x, sc_v, phase = self._score_pulse_train(buf, lag)
-            raw_scores.append((lag, sc_x, sc_v, phase))
-
-        # Normalize SC_x and SC_v separately across candidates (eq. 11)
-        sum_sc_x = sum(s[1] for s in raw_scores) + 1e-10
-        sum_sc_v = sum(s[2] for s in raw_scores) + 1e-10
-
-        best_score = -1.0
+        # Use the top EAC peak directly
         best_lag = candidates[0][1]
-        best_phase = 0
-        for lag, sc_x, sc_v, phase in raw_scores:
-            # Variance-dominant scoring: SC_v is the discriminative signal,
-            # SC_x biases toward fast tempos due to more pulse hits.
-            score = 0.2 * sc_x / sum_sc_x + 0.8 * sc_v / sum_sc_v
-            if score > best_score:
-                best_score = score
-                best_lag = lag
-                best_phase = phase
+        best_eac = candidates[0][0]
+
+        # Get phase from pulse train cross-correlation at the chosen lag
+        _, _, best_phase = self._score_pulse_train(buf, best_lag)
 
         self._best_period = best_lag
-        # Phase offset: how many frames from "now" to next predicted beat
-        # The best_phase is relative to the OSS window start; convert to
-        # frames-until-next-beat from current position
         self._best_phase = best_phase
         self._phase_counter = (self._window_frames - best_phase) % best_lag if best_lag > 0 else 0
 
-        # Accumulate into Gaussian histogram
-        self._histogram *= self._hist_decay
-        sigma = 10.0  # spread in lag samples
-        lags = np.arange(len(self._histogram))
-        gaussian = np.exp(-0.5 * ((lags - best_lag) / sigma) ** 2)
-        self._histogram += gaussian
+        # Convert lag to BPM
+        raw_bpm = 60.0 * self._oss_sr / best_lag
 
-        # Read peak of histogram as final estimate
-        peak_lag = np.argmax(self._histogram[self._min_lag:self._max_lag]) + self._min_lag
-        if peak_lag > 0:
-            self._bpm = 60.0 * self._oss_sr / peak_lag
-            self._has_estimate = True
-
-        # Confidence from histogram sharpness
-        hist_norm = self._histogram[self._min_lag:self._max_lag]
-        if hist_norm.max() > 0:
-            hist_norm = hist_norm / hist_norm.max()
-            # Entropy-based: sharp peak = low entropy = high confidence
-            h = hist_norm + 1e-10
-            h = h / h.sum()
-            entropy = -np.sum(h * np.log(h))
-            max_entropy = np.log(len(h))
-            self._confidence = max(0.0, 1.0 - entropy / max_entropy)
+        # Confidence from EAC peak strength relative to noise floor
+        # Strong peak = confident, weak peak = uncertain
+        eac_range = max(eac[self._min_lag:min(self._max_lag, n)]) - np.median(eac[self._min_lag:min(self._max_lag, n)])
+        if eac_range > 0:
+            self._confidence = min(1.0, best_eac / (eac_range + 1e-10) * 0.5)
         else:
             self._confidence = 0.0
 
-        if self._confidence > 0.5:
+        # Smooth BPM estimate: jump instantly if confident, blend if unsure
+        if not self._has_estimate:
+            self._bpm = raw_bpm
+            self._has_estimate = True
+        else:
+            # Blend toward new estimate, weighted by confidence
+            alpha = 0.3 * self._confidence + 0.05  # 0.05-0.35
+            self._bpm = (1 - alpha) * self._bpm + alpha * raw_bpm
+
+        if self._confidence > 0.3:
             self._last_confident_bpm = self._bpm
 
     def _score_pulse_train(self, oss: np.ndarray, period: int) -> tuple[float, float, int]:
