@@ -84,6 +84,21 @@ class BTrackTempoTracker(TempoTrackerBase):
         # TODO: compute from beat timing history
         return 0.0
 
+    @property
+    def locked(self) -> bool:
+        """BTrack doesn't have a lock concept."""
+        return False
+
+    @property
+    def saturated(self) -> bool:
+        """BTrack doesn't saturate."""
+        return False
+
+    @property
+    def bpm_delta(self) -> float:
+        """Rate of tempo change — not tracked by BTrack."""
+        return 0.0
+
     def reset(self) -> None:
         self._bt = BTrack(self._hop_size, self._hop_size * 2, self._sample_rate)
         self._beat_count = 0
