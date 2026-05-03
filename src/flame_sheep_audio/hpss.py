@@ -61,10 +61,11 @@ class LogMagnitudeTransform(SpectrumTransform):
 
     def __init__(self, gain: float = 1000.0) -> None:
         self._gain = gain
+        self._norm = 1.0 / np.log1p(gain)  # normalize to ~0-1 range
         self._prev_log_mag: np.ndarray | None = None
 
     def __call__(self, frame: SpectrumFrame) -> SpectrumFrame:
-        log_mag = np.log1p(self._gain * frame.magnitude).astype(np.float32)
+        log_mag = (np.log1p(self._gain * frame.magnitude) * self._norm).astype(np.float32)
 
         # Recompute flux on log magnitudes
         if self._prev_log_mag is not None:

@@ -65,10 +65,14 @@ class AudioProcessor:
                 self._spectrum_engine = OctaveBankEngine()
         # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
+
+        # Log-magnitude transform: models human loudness perception
+        from .hpss import LogMagnitudeTransform, PercussiveTransform
+        self._log_mag = LogMagnitudeTransform()
+
         self._stability = MagnitudeStability()
 
         # HPSS transforms — use apply() with shared stability mask
-        from .hpss import PercussiveTransform
         self._percussive = PercussiveTransform()
 
         from .beat_detector import PercentileBeatDetector
@@ -180,7 +184,8 @@ class AudioProcessor:
                 break  # source stopped
 
             now = time.perf_counter()
-            frame = self._spectrum_engine.push_hop(hop)
+            raw_frame = self._spectrum_engine.push_hop(hop)
+            frame = self._log_mag(raw_frame)
             self._stability.update(frame.magnitude)
             self._energy.update(frame.magnitude, frame.flux,
                                 stability=self._stability)
@@ -342,7 +347,8 @@ class AudioProcessor:
         if pcm is None:
             return []
 
-        frame = self._spectrum_engine.compute(pcm)
+        raw_frame = self._spectrum_engine.compute(pcm)
+        frame = self._log_mag(raw_frame)
         self._stability.update(frame.magnitude)
         self._energy.update(frame.magnitude, frame.flux,
                             stability=self._stability)
