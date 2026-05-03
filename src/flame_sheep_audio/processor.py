@@ -76,7 +76,7 @@ class AudioProcessor:
         self._percussive = PercussiveTransform()
 
         from .beat_detector import PercentileBeatDetector
-        self._detector = PercentileBeatDetector(percentile=95.0,
+        self._detector = PercentileBeatDetector(percentile=99.0,
                                                 band_config=band_config,
                                                 freqs=freqs)
         self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
