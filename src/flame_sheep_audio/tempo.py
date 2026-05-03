@@ -83,8 +83,10 @@ class PercivalTempoTracker(TempoTrackerBase):
                  acf_exponent: float = 0.5,
                  window_seconds: float = 6.0,
                  update_seconds: float = 0.37,
-                 n_candidates: int = 10) -> None:
+                 n_candidates: int = 10,
+                 log_compress: bool = True) -> None:
         self._hop = hop_duration
+        self._log_compress = log_compress
         self._min_bpm = min_bpm
         self._max_bpm = max_bpm
         self._c = acf_exponent
@@ -134,8 +136,12 @@ class PercivalTempoTracker(TempoTrackerBase):
     def feed(self, onset_strength: float, onset_density: float = 0.0) -> None:
         self._phase_counter += 1
 
-        # Log-compress: ln(1 + 1000 * x)
-        compressed = np.log1p(1000.0 * max(0.0, onset_strength))
+        # If upstream already provides log-compressed flux (via LogMagnitudeTransform),
+        # skip the log compression here. Otherwise apply it.
+        if self._log_compress:
+            compressed = np.log1p(1000.0 * max(0.0, onset_strength))
+        else:
+            compressed = max(0.0, onset_strength)
 
         # Low-pass filter (causal, sample-by-sample)
         x = np.array([compressed])
@@ -195,12 +201,23 @@ class PercivalTempoTracker(TempoTrackerBase):
             return
 
         # Score candidates via cross-correlation with pulse trains
+        # Collect raw SC_x and SC_v per candidate, then normalize (eq. 11)
+        raw_scores = []
+        for _, lag in candidates:
+            sc_x, sc_v, phase = self._score_pulse_train(buf, lag)
+            raw_scores.append((lag, sc_x, sc_v, phase))
+
+        # Normalize SC_x and SC_v separately across candidates (eq. 11)
+        sum_sc_x = sum(s[1] for s in raw_scores) + 1e-10
+        sum_sc_v = sum(s[2] for s in raw_scores) + 1e-10
+
         best_score = -1.0
         best_lag = candidates[0][1]
         best_phase = 0
-
-        for _, lag in candidates:
-            score, phase = self._score_pulse_train(buf, lag)
+        for lag, sc_x, sc_v, phase in raw_scores:
+            # Variance-dominant scoring: SC_v is the discriminative signal,
+            # SC_x biases toward fast tempos due to more pulse hits.
+            score = 0.2 * sc_x / sum_sc_x + 0.8 * sc_v / sum_sc_v
             if score > best_score:
                 best_score = score
                 best_lag = lag
@@ -242,34 +259,69 @@ class PercivalTempoTracker(TempoTrackerBase):
         if self._confidence > 0.5:
             self._last_confident_bpm = self._bpm
 
-    def _score_pulse_train(self, oss: np.ndarray, period: int) -> tuple[float, int]:
-        """Score a tempo candidate by cross-correlating OSS with pulse trains.
+    def _score_pulse_train(self, oss: np.ndarray, period: int) -> tuple[float, float, int]:
+        """Score a tempo candidate per Percival & Tzanetakis eq. 8-11.
 
-        Tests all phases. Returns (variance_score, best_phase).
-        High variance = clear beats at this period.
-        Best phase = the phase offset with highest cross-correlation.
+        Builds a combined pulse train with three metrical levels:
+          - Every beat (period P), weight 1.0
+          - Every 1.5 beats (period 1.5*P), weight 0.5
+          - Every 2 beats (period 2*P), weight 0.5
+        Cross-correlates with OSS at all phases.
+        Returns (SC_x, SC_v, best_phase).
+        SC_x = max cross-correlation across phases.
+        SC_v = variance of cross-correlation across phases.
         """
         n = len(oss)
-        scores = []
+        if period < 2:
+            return 0.0, 0.0, 0
+
+        # Cross-correlate pulse train with OSS at each phase
+        xcorr = np.zeros(period, dtype=np.float64)
+
         for phase in range(period):
             total = 0.0
-            count = 0
-            for multiplier in [1.0, 1.5, 2.0]:
-                weight = 1.0 if multiplier == 1.0 else 0.5
-                pos = phase
-                while pos < n:
-                    total += oss[int(pos)] * weight
-                    count += 1
-                    pos += period * multiplier
-            if count > 0:
-                scores.append(total / count)
-            else:
-                scores.append(0.0)
+            n_pulses = 0
+            # Train 1: pulses every P samples, weight 1.0
+            b = 0
+            while True:
+                idx = phase + b * period
+                if idx >= n:
+                    break
+                total += oss[idx] * 1.0
+                n_pulses += 1
+                b += 1
 
-        if len(scores) < 2:
-            return 0.0, 0
-        best_phase = int(np.argmax(scores))
-        return float(np.var(scores)), best_phase
+            # Train 2: pulses every 1.5*P samples, weight 0.5
+            b = 0
+            step_15 = period * 1.5
+            while True:
+                idx = int(phase + b * step_15)
+                if idx >= n:
+                    break
+                total += oss[idx] * 0.5
+                n_pulses += 1
+                b += 1
+
+            # Train 3: pulses every 2*P samples, weight 0.5
+            b = 0
+            step_2 = period * 2
+            while True:
+                idx = phase + b * step_2
+                if idx >= n:
+                    break
+                total += oss[idx] * 0.5
+                n_pulses += 1
+                b += 1
+
+            xcorr[phase] = total
+
+        # SC_x: max cross-correlation (best phase alignment)
+        sc_x = float(xcorr.max())
+        # SC_v: variance across phases (rhythmic clarity)
+        sc_v = float(xcorr.var())
+        best_phase = int(np.argmax(xcorr))
+
+        return sc_x, sc_v, best_phase
 
     @property
     def bpm(self) -> float:

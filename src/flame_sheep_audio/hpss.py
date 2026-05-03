@@ -48,6 +48,42 @@ class SpectrumTransform(ABC):
         ...
 
 
+class LogMagnitudeTransform(SpectrumTransform):
+    """Convert magnitude to log scale: ln(1 + gain * magnitude).
+
+    Placed right after the spectrum engine, before HPSS/detection/energy.
+    Models human loudness perception (Weber-Fechner law).
+
+    Flux is recomputed as the half-wave rectified difference of
+    log-magnitudes — measures relative spectral change instead of
+    absolute. A kick at -20dB and -40dB produce similar flux.
+    """
+
+    def __init__(self, gain: float = 1000.0) -> None:
+        self._gain = gain
+        self._prev_log_mag: np.ndarray | None = None
+
+    def __call__(self, frame: SpectrumFrame) -> SpectrumFrame:
+        log_mag = np.log1p(self._gain * frame.magnitude).astype(np.float32)
+
+        # Recompute flux on log magnitudes
+        if self._prev_log_mag is not None:
+            log_flux = np.maximum(log_mag - self._prev_log_mag, 0.0).astype(np.float32)
+        else:
+            log_flux = np.zeros_like(log_mag)
+        self._prev_log_mag = log_mag.copy()
+
+        return SpectrumFrame(
+            magnitude=log_mag,
+            flux=log_flux,
+            waveform=frame.waveform,
+            zcr=frame.zcr,
+        )
+
+    def reset(self) -> None:
+        self._prev_log_mag = None
+
+
 class HarmonicTransform(SpectrumTransform):
     """Extract harmonic content — suppress transients.
 
