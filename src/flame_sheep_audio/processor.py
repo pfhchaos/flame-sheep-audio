@@ -85,10 +85,15 @@ class AudioProcessor:
         # Auto-detect: FeedSource is synchronous, everything else is threaded
         self._threaded = not isinstance(self._source, FeedSource)
 
-        # ACF tempo tracker: frame cadence depends on mode
-        # Threaded: HOP_SIZE hops (~10.7ms). Sync: FFT_SIZE frames (~42.7ms).
-        frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
-        self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
+        # Tempo tracker: prefer BTrack (real-time beat tracker) over ACF
+        try:
+            from .tempo_btrack import BTrackTempoTracker
+            self._tempo = BTrackTempoTracker(hop_size=HOP_SIZE, sample_rate=SAMPLE_RATE)
+            self._tempo_has_audio = True
+        except ImportError:
+            frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
+            self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
+            self._tempo_has_audio = False
 
         # Tempo-adaptive constant scaler
         from .tempo_scaler import TempoScaler
@@ -195,12 +200,13 @@ class AudioProcessor:
             perc_frame = self._percussive.apply(frame, mask)
             events = self._detector.detect(perc_frame)
 
-            # Onset strength for tempo tracker
-            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
-
-            # Feed ACF tempo tracker with percussive onset strength
-            total_density = sum(self._density.densities_slow.values())
-            self._tempo.feed(perc_onset, onset_density=total_density)
+            # Feed tempo tracker — BTrack prefers raw audio, ACF uses onset strength
+            if self._tempo_has_audio:
+                self._tempo.feed_audio(hop)
+            else:
+                perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
+                total_density = sum(self._density.densities_slow.values())
+                self._tempo.feed(perc_onset, onset_density=total_density)
             self._scaler.update(self._tempo.effective_bpm)
             self._energy.update_tempo(self._tempo.effective_bpm)
 
@@ -358,12 +364,15 @@ class AudioProcessor:
         perc_frame = self._percussive.apply(frame, mask)
         events = self._detector.detect(perc_frame)
 
-        # Onset strength for tempo tracker
-        perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
-
-        # Feed ACF tempo tracker with percussive onset strength
-        total_density = sum(self._density.densities.values())
-        self._tempo.feed(perc_onset, onset_density=total_density)
+        # Feed tempo tracker
+        if self._tempo_has_audio:
+            # Sync path doesn't have raw hop — feed onset strength instead
+            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
+            self._tempo.feed(perc_onset)
+        else:
+            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
+            total_density = sum(self._density.densities.values())
+            self._tempo.feed(perc_onset, onset_density=total_density)
         self._scaler.update(self._tempo.effective_bpm)
 
         # Feed density tracker

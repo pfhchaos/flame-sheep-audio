@@ -66,7 +66,11 @@ class TempoTrackerBase(ABC):
 
 
 class PercivalTempoTracker(TempoTrackerBase):
-    """Tempo estimation following Percival & Tzanetakis (2014).
+    """EXPERIMENTAL — Tempo estimation following Percival & Tzanetakis (2014).
+
+    Known issues: pulse train scoring biases toward short lags.
+    Use BTrackTempoTracker for production. This implementation is
+    kept for reference and future improvement.
 
     Pipeline:
       1. Log-compress onset strength (reduces dynamic range)
