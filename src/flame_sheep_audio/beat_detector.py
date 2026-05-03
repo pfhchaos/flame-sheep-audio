@@ -304,3 +304,80 @@ class FluxBeatDetector(BeatDetectorBase):
             if shift > SECTION_THRESHOLD:
                 self._adapt_alpha = ADAPT_FAST_ALPHA
                 self._fast_adapt_remaining = FAST_ADAPT_FRAMES
+
+
+class PercentileBeatDetector(BeatDetectorBase):
+    """Onset detection using percentile-based adaptive thresholds.
+
+    Triggers when per-band flux exceeds the Nth percentile of recent
+    history. Adapts automatically to local dynamics — quiet passages
+    have low thresholds, busy passages have high thresholds.
+
+    Simpler than FluxBeatDetector: no sharpness gate, no stability
+    scaling, no adaptive bands. Just percentile + cooldown.
+    """
+
+    def __init__(self, percentile: float = 90.0,
+                 cooldown_beats: float = 0.25,
+                 min_flux: float = 1e-7,
+                 history_len: int = HISTORY_LEN,
+                 band_config: BandConfig | None = None,
+                 freqs: np.ndarray | None = None) -> None:
+        self._percentile = percentile
+        self._cooldown_beats = cooldown_beats
+        self._min_flux = min_flux
+        self._bpm = 0.0
+
+        if band_config is None:
+            band_config = default_band_config()
+        self._detection_names = list(band_config.detection_band_names)
+
+        _freqs = freqs if freqs is not None else FREQS
+        self._bands = {b.name: (_freqs >= b.freq_range[0]) & (_freqs < b.freq_range[1])
+                       for b in band_config.detection_bands}
+
+        self._flux_history = {
+            name: deque(maxlen=history_len)
+            for name in self._detection_names
+        }
+        self._cooldown_frames = {name: 0 for name in self._detection_names}
+        self._frame_count = {name: 0 for name in self._detection_names}
+
+    def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
+        flux = frame.flux
+        events = []
+
+        for band in self._detection_names:
+            mask = self._bands[band]
+            band_flux = float(flux[mask].mean()) if mask.any() else 0.0
+            hist = self._flux_history[band]
+
+            self._frame_count[band] += 1
+            bpm = self._bpm if self._bpm > 0 else 120.0
+            cd = _scaler.beats_to_frames(bpm, self._cooldown_beats)
+            in_cooldown = (self._frame_count[band]
+                           - self._cooldown_frames[band]) < cd
+
+            if len(hist) >= 10 and band_flux > self._min_flux and not in_cooldown:
+                threshold_value = float(np.percentile(hist, self._percentile))
+
+                if threshold_value < self._min_flux:
+                    if band_flux > self._min_flux * 1000:
+                        events.append(BeatEvent(kind=band, energy=1.0))
+                        self._cooldown_frames[band] = self._frame_count[band]
+                elif band_flux > threshold_value:
+                    normalized = min(1.0,
+                        (band_flux - threshold_value) / (threshold_value + 1e-10))
+                    events.append(BeatEvent(kind=band, energy=normalized))
+                    self._cooldown_frames[band] = self._frame_count[band]
+
+            hist.append(band_flux)
+
+        return events
+
+    def reset_bands(self) -> None:
+        for hist in self._flux_history.values():
+            hist.clear()
+        for name in self._cooldown_frames:
+            self._cooldown_frames[name] = 0
+            self._frame_count[name] = 0
