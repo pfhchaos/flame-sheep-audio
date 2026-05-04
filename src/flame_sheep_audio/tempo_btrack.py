@@ -99,6 +99,14 @@ class BTrackTempoTracker(TempoTrackerBase):
         """Rate of tempo change — not tracked by BTrack."""
         return 0.0
 
+    def song_started(self) -> None:
+        """Reset for new song."""
+        self.reset()
+
+    def hint_tempo(self, bpm: float) -> None:
+        """External tempo hint — BTrack doesn't support this, ignore."""
+        pass
+
     def reset(self) -> None:
         self._bt = BTrack(self._hop_size, self._hop_size * 2, self._sample_rate)
         self._beat_count = 0

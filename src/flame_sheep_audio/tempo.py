@@ -64,6 +64,30 @@ class TempoTrackerBase(ABC):
         """Reset all state for a song change."""
         ...
 
+    def song_started(self) -> None:
+        """Reset for a new song. Default: calls reset()."""
+        self.reset()
+
+    def hint_tempo(self, bpm: float) -> None:
+        """Provide external tempo hint (e.g. from metadata).
+        Default: ignore. Implementations may use this to bootstrap."""
+        pass
+
+    @property
+    def locked(self) -> bool:
+        """Whether tempo is locked to a confident estimate."""
+        return False
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the tracker has saturated (implementation-specific)."""
+        return False
+
+    @property
+    def bpm_delta(self) -> float:
+        """Rate of tempo change (BPM/s). Positive = accelerando."""
+        return 0.0
+
 
 class PercivalTempoTracker(TempoTrackerBase):
     """EXPERIMENTAL — Tempo estimation following Percival & Tzanetakis (2014).

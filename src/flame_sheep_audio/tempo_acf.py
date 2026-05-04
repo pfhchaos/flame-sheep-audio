@@ -32,7 +32,10 @@ MIN_BPM = 60
 MAX_BPM = 400
 
 
-class AutocorrelationTempoTracker:
+from .tempo import TempoTrackerBase
+
+
+class AutocorrelationTempoTracker(TempoTrackerBase):
     """Tempo estimation via autocorrelation of onset strength.
 
     Call feed() with a scalar onset strength value each audio frame.
@@ -317,6 +320,11 @@ class AutocorrelationTempoTracker:
     def saturated(self) -> bool:
         """Not applicable for ACF tracker — always False."""
         return False
+
+    @property
+    def phase(self) -> float:
+        """ACF tracker doesn't estimate phase."""
+        return 0.0
 
     @property
     def raw_bpm(self) -> float:
