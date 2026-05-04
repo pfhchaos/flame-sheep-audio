@@ -67,13 +67,16 @@ class CqtEngine(SpectrumEngineBase):
         # rt-cqt expects list of doubles
         self._cqt.inputBlock(hop.astype(np.float64).tolist(), len(hop))
 
-        # Extract magnitudes from all octaves
+        # Extract magnitudes and phase from all octaves
         magnitude = np.zeros(self.n_bins, dtype=np.float32)
+        phase = np.zeros(self.n_bins, dtype=np.float32)
         for cqt_oct in range(self._n_octaves):
             our_oct = self._n_octaves - 1 - cqt_oct
             vals = self._cqt.getOctaveValues(cqt_oct)
             start = our_oct * self._bpo
-            magnitude[start:start + self._bpo] = [abs(v) for v in vals]
+            for i, v in enumerate(vals):
+                magnitude[start + i] = abs(v)
+                phase[start + i] = np.angle(v)
 
         # Flux
         if self._prev_spectrum is not None:
@@ -90,6 +93,7 @@ class CqtEngine(SpectrumEngineBase):
             magnitude=magnitude,
             flux=flux,
             waveform=hop.copy(),
+            phase=phase,
             zcr=zcr,
         )
 

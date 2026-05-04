@@ -22,6 +22,7 @@ class SpectrumFrame:
     magnitude: np.ndarray    # (n_bins,) float32, FFT magnitude spectrum
     flux: np.ndarray         # (n_bins,) float32, half-wave rectified spectral flux
     waveform: np.ndarray     # (HOP_SIZE,) float32, raw PCM window
+    phase: np.ndarray | None = None  # (n_bins,) float32, spectral phase (optional, CQT only)
     onset_strength: float = 0.0  # A-weighted flux sum — scalar for tempo tracking
     zcr: float = 0.0             # zero-crossing rate (crossings per sample, speech/music discriminator)
 
