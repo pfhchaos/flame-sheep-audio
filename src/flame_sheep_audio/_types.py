@@ -18,7 +18,7 @@ class BeatEvent:
     Axes should ignore event kinds they don't recognize — new kinds
     can be added without updating every consumer.
     """
-    kind: str       # detection band name (e.g. 'kick' | 'snare' | 'hihat') or 'song_start'
+    kind: str       # detection band name (e.g. 'low' | 'mid' | 'high') or 'song_start'
     energy: float   # normalized 0..1, how strong the onset was
 
 
@@ -57,6 +57,7 @@ class AudioState:
     centroid_delta: float = 0.0
     centroid_rms: float = 0.0
     centroid_harmonic_rms: float = 0.0
+    slow_centroid_harmonic_rms: float = 0.0
 
     # Global
     percussiveness: float = 0.5
@@ -66,6 +67,7 @@ class AudioState:
     effective_bpm: float = 120.0     # blended with default based on confidence
     tempo_confidence: float = 0.0    # ACF tempo tracker confidence (0..1)
     tempo_saturated: bool = False    # True when onset rate exceeds tracking range
+    mode: str = 'idle'               # 'idle' | 'energy' | 'beat'
     break_intensity: float = 0.0     # 0=normal, 1=deep break
 
 
@@ -89,6 +91,7 @@ class AudioSnapshot:
     centroid_delta: float = 0.0
     centroid_rms: float = 0.0
     centroid_harmonic_rms: float = 0.0
+    slow_centroid_harmonic_rms: float = 0.0
 
     # Global
     percussiveness: float = 0.5

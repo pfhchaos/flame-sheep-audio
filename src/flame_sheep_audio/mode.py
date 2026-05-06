@@ -36,12 +36,12 @@ BEAT_ENTER_FRAMES = 90       # ~1s of music detected -> enter beat
 BEAT_EXIT_FRAMES = 900       # ~10s of non-music -> exit beat
 ENERGY_TO_IDLE_FRAMES = 1800 # ~20s of silence -> enter idle
 
-# Spectral novelty thresholds (octave bank corpus analysis 2026-05-02):
-#   music:  mean 0.067-0.120
-#   speech: mean 0.240-0.252
-#   noise:  mean 0.067-0.123
-NOVELTY_SPEECH = 0.18        # above this = likely speech -> energy mode
-NOVELTY_MUSIC = 0.14         # below this = likely music -> beat mode (hysteresis)
+# Spectral novelty thresholds (log-magnitude FFT corpus analysis 2026-05-05):
+#   music:  mean 0.048-0.098, p90 0.07-0.14
+#   speech: mean 0.165-0.199, p90 0.25-0.28
+#   noise:  mean 0.059-0.086, p90 0.07-0.11
+NOVELTY_SPEECH = 0.13        # above this = likely speech -> energy mode
+NOVELTY_MUSIC = 0.10         # below this = likely music -> beat mode (hysteresis)
 ACF_CONFIDENCE_ENTER = 0.7   # ACF confidence to enter beat (rhythmic non-percussive music)
 RMS_THRESHOLD = 0.0001       # broadband RMS below this = silence
 

@@ -85,6 +85,7 @@ class EnergyAnalyzer:
         # Harmonic energy (stability-weighted)
         self._harmonic_rms = 0.0
         self._harmonic_centroid_rms = 0.0
+        self._slow_harmonic_centroid_rms = 0.0
 
     def update(self, spectrum: np.ndarray, flux: np.ndarray | None = None,
                stability: MagnitudeStability | None = None) -> float:
@@ -163,6 +164,10 @@ class EnergyAnalyzer:
                     self._harmonic_centroid_rms = (
                         self._centroid_alpha * self._harmonic_centroid_rms
                         + (1 - self._centroid_alpha) * raw_hc)
+                    # Slow envelope: slow attack, faster release
+                    sha = slow_attack if raw_hc > self._slow_harmonic_centroid_rms else slow_release
+                    self._slow_harmonic_centroid_rms = (
+                        sha * self._slow_harmonic_centroid_rms + (1 - sha) * raw_hc)
 
         # Percussiveness: flux / magnitude ratio (original method)
         if flux is not None and mag_sum > 1e-10:
@@ -302,3 +307,8 @@ class EnergyAnalyzer:
     def harmonic_centroid_rms(self) -> float:
         """RMS around centroid from stable (harmonic) bins only."""
         return self._harmonic_centroid_rms
+
+    @property
+    def slow_harmonic_centroid_rms(self) -> float:
+        """Slow-envelope harmonic centroid RMS (~2s attack, ~0.5s release)."""
+        return self._slow_harmonic_centroid_rms

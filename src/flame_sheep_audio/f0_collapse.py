@@ -10,12 +10,12 @@ Example: a 440Hz tone with harmonics at 880, 1320, 1760:
   - Octave containing 880Hz: magnitude minus 440Hz's contribution → ~0
   - Octave containing 1320Hz: minus 440Hz's 3rd harmonic → ~0
 
-A kick at 60Hz with a harmonic at 120Hz:
-  - Octave 0 (33-65Hz): kick energy survives
+A low-frequency hit at 60Hz with a harmonic at 120Hz:
+  - Octave 0 (33-65Hz): energy survives
   - Octave 1 (65-131Hz): 120Hz minus 60Hz's 2nd harmonic → ~0
 
-A snare at 200Hz with no fundamental below it:
-  - Octave 2 (131-262Hz): nothing to subtract → snare survives
+A mid-frequency hit at 200Hz with no fundamental below it:
+  - Octave 2 (131-262Hz): nothing to subtract → energy survives
 
 Works with any log-spaced bin layout (CQT, octave bank).
 Assumes bins_per_octave bins per octave, evenly log-spaced.

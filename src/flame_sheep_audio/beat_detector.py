@@ -65,11 +65,11 @@ class FluxBeatDetector(BeatDetectorBase):
     @property
     def THRESHOLD(self) -> float: return cfg.detection.base_threshold
     @property
-    def KICK_THRESHOLD(self) -> float: return cfg.detection.kick_threshold
+    def LOW_THRESHOLD(self) -> float: return cfg.detection.low_threshold
     @property
     def COOLDOWN(self) -> int: return cfg.detection.cooldown_frames
     @property
-    def KICK_COOLDOWN(self) -> int: return cfg.detection.kick_cooldown_frames
+    def LOW_COOLDOWN(self) -> int: return cfg.detection.low_cooldown_frames
     @property
     def STABILITY_SCALING(self) -> float: return cfg.detection.stability_scaling
     @property
@@ -180,7 +180,7 @@ class FluxBeatDetector(BeatDetectorBase):
                 local_avg = float(np.mean(hist))
 
                 # Attack sharpness gate
-                if (self._sharpness and band != 'kick'
+                if (self._sharpness and band != 'low'
                         and len(recent) > self.SHARPNESS_LOOKBACK):
                     pre_attack = float(np.median(list(recent)[:-1]))
                     if pre_attack > self.MIN_FLUX:

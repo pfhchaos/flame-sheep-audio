@@ -67,12 +67,14 @@ class AudioProcessor:
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
 
         # Log-magnitude transform: models human loudness perception
-        from .hpss import LogMagnitudeTransform, PercussiveTransform
+        from .hpss import LogMagnitudeTransform, PercussiveTransform, ComplexSpectralDiffTransform
         self._log_mag = LogMagnitudeTransform()
+        self._csd = ComplexSpectralDiffTransform()
 
         self._stability = MagnitudeStability()
 
-        # HPSS transforms — use apply() with shared stability mask
+        # HPSS transforms — used for harmonic content isolation only,
+        # not for beat detection (CSD handles onset detection directly)
         self._percussive = PercussiveTransform()
 
         from .beat_detector import PercentileBeatDetector
@@ -114,6 +116,7 @@ class AudioProcessor:
         self._centroid_delta = 0.0
         self._centroid_rms = 0.0
         self._centroid_harmonic_rms = 0.0
+        self._slow_centroid_harmonic_rms = 0.0
         self._percussiveness = 0.5
         self._spectral_novelty = 0.0
         self._section_change = 0.0
@@ -190,23 +193,25 @@ class AudioProcessor:
 
             now = time.perf_counter()
             raw_frame = self._spectrum_engine.push_hop(hop)
+
+            # CSD on raw frame for onset detection (before log transform)
+            csd_frame = self._csd(raw_frame)
+
             frame = self._log_mag(raw_frame)
             self._stability.update(frame.magnitude)
             self._energy.update(frame.magnitude, frame.flux,
                                 stability=self._stability)
 
-            # HPSS: percussive transform for beat detection + tempo
-            mask = self._stability.stability_per_bin()
-            perc_frame = self._percussive.apply(frame, mask)
-            events = self._detector.detect(perc_frame)
+            # Beat detection from CSD flux (no HPSS needed)
+            events = self._detector.detect(csd_frame)
 
             # Feed tempo tracker — BTrack prefers raw audio, ACF uses onset strength
             if self._tempo_has_audio:
                 self._tempo.feed_audio(hop)
             else:
-                perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
+                onset_str = float(np.dot(csd_frame.flux, self._energy._a_weights))
                 total_density = sum(self._density.densities_slow.values())
-                self._tempo.feed(perc_onset, onset_density=total_density)
+                self._tempo.feed(onset_str, onset_density=total_density)
             self._scaler.update(self._tempo.effective_bpm)
             self._energy.update_tempo(self._tempo.effective_bpm)
 
@@ -236,6 +241,7 @@ class AudioProcessor:
                 self._centroid_delta = self._energy.centroid_delta
                 self._centroid_rms = self._energy.centroid_rms
                 self._centroid_harmonic_rms = self._energy.harmonic_centroid_rms
+                self._slow_centroid_harmonic_rms = self._energy.slow_harmonic_centroid_rms
                 self._percussiveness = self._energy.percussiveness
                 self._spectral_novelty = self._energy.spectral_novelty
                 self._section_change = self._energy.section_change
@@ -268,6 +274,7 @@ class AudioProcessor:
                     centroid_delta=self._centroid_delta,
                     centroid_rms=self._centroid_rms,
                     centroid_harmonic_rms=self._centroid_harmonic_rms,
+                    slow_centroid_harmonic_rms=self._slow_centroid_harmonic_rms,
                     percussiveness=self._percussiveness,
                     spectral_novelty=self._spectral_novelty,
                     section_change=self._section_change,
@@ -354,25 +361,25 @@ class AudioProcessor:
             return []
 
         raw_frame = self._spectrum_engine.compute(pcm)
+
+        # CSD on raw frame for onset detection (before log transform)
+        csd_frame = self._csd(raw_frame)
+
         frame = self._log_mag(raw_frame)
         self._stability.update(frame.magnitude)
         self._energy.update(frame.magnitude, frame.flux,
                             stability=self._stability)
 
-        # HPSS: percussive transform for beat detection + tempo
-        mask = self._stability.stability_per_bin()
-        perc_frame = self._percussive.apply(frame, mask)
-        events = self._detector.detect(perc_frame)
+        # Beat detection from CSD flux (no HPSS needed)
+        events = self._detector.detect(csd_frame)
 
         # Feed tempo tracker
+        onset_str = float(np.dot(csd_frame.flux, self._energy._a_weights))
         if self._tempo_has_audio:
-            # Sync path doesn't have raw hop — feed onset strength instead
-            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
-            self._tempo.feed(perc_onset)
+            self._tempo.feed(onset_str)
         else:
-            perc_onset = float(np.dot(perc_frame.flux, self._energy._a_weights))
             total_density = sum(self._density.densities.values())
-            self._tempo.feed(perc_onset, onset_density=total_density)
+            self._tempo.feed(onset_str, onset_density=total_density)
         self._scaler.update(self._tempo.effective_bpm)
 
         # Feed density tracker
@@ -481,9 +488,9 @@ class SyntheticAudioProcessor:
     should fire and can judge whether the app responds correctly.
 
     Pattern (all timings in seconds, relative to start()):
-      kick  — every `kick_interval`  seconds  (default 0.5s = 120 bpm)
-      snare — every `snare_interval` seconds  (default 1.0s, on the 2 and 4)
-      hihat — every `hihat_interval` seconds  (default 0.25s = 8th notes)
+      low  — every `low_interval`  seconds  (default 0.5s = 120 bpm)
+      mid  — every `mid_interval` seconds  (default 1.0s, on the 2 and 4)
+      high — every `high_interval` seconds  (default 0.25s = 8th notes)
 
     A fake spectrum is synthesised so the audio visualiser on the GPU
     (tonemap.frag pulse effect) still animates.
@@ -491,9 +498,9 @@ class SyntheticAudioProcessor:
 
     def __init__(
         self,
-        kick_interval:  float = 0.5,
-        snare_interval: float = 1.0,
-        hihat_interval: float = 0.25,
+        low_interval:  float = 0.5,
+        mid_interval: float = 1.0,
+        high_interval: float = 0.25,
         bpm_label:      str   = '120 bpm',
         clock: Callable[[], float] | None = None,
         band_config: BandConfig | None = None,
@@ -502,14 +509,14 @@ class SyntheticAudioProcessor:
             band_config = default_band_config()
         self._band_config = band_config
 
-        self.kick_interval  = kick_interval
-        self.snare_interval = snare_interval
-        self.hihat_interval = hihat_interval
+        self.low_interval  = low_interval
+        self.mid_interval = mid_interval
+        self.high_interval = high_interval
         self.bpm_label      = bpm_label
         self._clock         = clock  # callable returning seconds, or None for perf_counter
 
         self._start_time: float | None = None
-        self._last: dict[str, float]   = {'kick': -1.0, 'snare': -1.0, 'hihat': -1.0}
+        self._last: dict[str, float]   = {'low': -1.0, 'mid': -1.0, 'high': -1.0}
         self._n_bins   = N_BINS  # default; overridable for non-FFT engines
         self._spectrum = np.zeros(self._n_bins, dtype=np.float32)
         self._rms      = 0.5  # synthetic audio is "always playing"
@@ -521,9 +528,9 @@ class SyntheticAudioProcessor:
             import time
             self._start_time = time.perf_counter()
         log.info(f'[synthetic audio] {self.bpm_label}  '
-              f'kick={self.kick_interval:.2f}s  '
-              f'snare={self.snare_interval:.2f}s  '
-              f'hihat={self.hihat_interval:.2f}s')
+              f'low={self.low_interval:.2f}s  '
+              f'mid={self.mid_interval:.2f}s  '
+              f'high={self.high_interval:.2f}s')
 
     def stop(self) -> None:
         pass  # nothing to close
@@ -553,9 +560,9 @@ class SyntheticAudioProcessor:
         self._spectrum[:] = 0.0
 
         for band, interval in [
-            ('kick',  self.kick_interval),
-            ('snare', self.snare_interval),
-            ('hihat', self.hihat_interval),
+            ('low',  self.low_interval),
+            ('mid', self.mid_interval),
+            ('high', self.high_interval),
         ]:
             # Fire when we cross a beat boundary since last call
             beat_num_now  = int(now / interval)
@@ -566,9 +573,9 @@ class SyntheticAudioProcessor:
                 # Inject energy into the matching spectrum region so the
                 # GPU pulse effect fires visually too
                 freqs = np.fft.rfftfreq(FFT_SIZE, 1.0 / SAMPLE_RATE)
-                if band == 'kick':
+                if band == 'low':
                     mask = (freqs >= 50) & (freqs < 100)
-                elif band == 'snare':
+                elif band == 'mid':
                     mask = (freqs >= 150) & (freqs < 800)
                 else:
                     mask = freqs >= 8000

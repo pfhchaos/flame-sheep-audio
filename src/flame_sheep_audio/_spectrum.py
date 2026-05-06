@@ -78,7 +78,9 @@ class SpectrumEngine(SpectrumEngineBase):
             SpectrumFrame with magnitude, flux, and waveform.
         """
         windowed = pcm * self._window
-        magnitude = (np.abs(np.fft.rfft(windowed)) / FFT_SIZE).astype(np.float32)
+        complex_spectrum = np.fft.rfft(windowed) / FFT_SIZE
+        magnitude = np.abs(complex_spectrum).astype(np.float32)
+        phase = np.angle(complex_spectrum).astype(np.float32)
 
         if self._prev_spectrum is not None:
             flux = np.maximum(magnitude - self._prev_spectrum, 0.0).astype(np.float32)
@@ -95,6 +97,7 @@ class SpectrumEngine(SpectrumEngineBase):
             magnitude=magnitude,
             flux=flux,
             waveform=pcm.copy(),
+            phase=phase,
             # onset_strength computed downstream after HPSS split
             zcr=zcr,
         )

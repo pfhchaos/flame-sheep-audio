@@ -56,7 +56,7 @@ class LogMagnitudeTransform(SpectrumTransform):
 
     Flux is recomputed as the half-wave rectified difference of
     log-magnitudes — measures relative spectral change instead of
-    absolute. A kick at -20dB and -40dB produce similar flux.
+    absolute. A low-band hit at -20dB and -40dB produce similar flux.
     """
 
     def __init__(self, gain: float = 1000.0) -> None:
@@ -78,6 +78,7 @@ class LogMagnitudeTransform(SpectrumTransform):
             magnitude=log_mag,
             flux=log_flux,
             waveform=frame.waveform,
+            phase=frame.phase,
             zcr=frame.zcr,
         )
 
@@ -107,12 +108,94 @@ class HarmonicTransform(SpectrumTransform):
             magnitude=(frame.magnitude * mask).astype(np.float32),
             flux=(frame.flux * mask).astype(np.float32),
             waveform=frame.waveform,
+            phase=frame.phase,
             zcr=frame.zcr,
         )
 
     def reset(self) -> None:
         if self._estimator is not None:
             self._estimator.reset()
+
+
+class ComplexSpectralDiffTransform(SpectrumTransform):
+    """Replace flux with complex spectral difference.
+
+    Uses phase acceleration (2nd derivative) to detect onsets even in
+    wall-of-sound tracks where magnitude flux is flat. Sustained tones
+    have linear phase evolution (predictable 2nd derivative ≈ 0); onsets
+    create phase discontinuities.
+
+    Algorithm (Bello et al. / Gist OnsetDetectionFunction):
+      1. phase_dev = phase - 2*prev_phase + prev_prev_phase
+      2. princarg(phase_dev) → wrap to [-π, π]
+      3. mag_diff = |current| - |previous|  (half-wave rectified)
+      4. phase_diff = -|current| * sin(phase_dev)  (magnitude-weighted)
+      5. complex_flux = mag_diff + phase_weight * max(phase_diff, 0)
+
+    The raw CSD has a higher floor than magnitude flux (phase noise in
+    sustained tones), so we subtract a running mean per bin to normalize.
+    """
+
+    def __init__(self) -> None:
+        self._prev_phase: np.ndarray | None = None
+        self._prev_prev_phase: np.ndarray | None = None
+        self._prev_magnitude: np.ndarray | None = None
+        self._running_mean: np.ndarray | None = None
+        self._alpha = 0.05  # EMA smoothing for running mean
+
+    def __call__(self, frame: SpectrumFrame) -> SpectrumFrame:
+        if frame.phase is None:
+            return frame  # no phase available, pass through unchanged
+
+        phase = frame.phase
+        mag = frame.magnitude
+
+        if self._prev_phase is not None and self._prev_prev_phase is not None:
+            # Phase deviation (2nd derivative)
+            phase_dev = phase - 2.0 * self._prev_phase + self._prev_prev_phase
+
+            # Principal argument: wrap to [-π, π]
+            phase_dev = (phase_dev + np.pi) % (2.0 * np.pi) - np.pi
+
+            # Magnitude difference (half-wave rectified)
+            mag_diff = np.maximum(mag - self._prev_magnitude, 0.0)
+
+            # Phase difference (magnitude-weighted)
+            phase_diff = np.abs(mag * np.sin(phase_dev))
+
+            # Complex spectral difference
+            raw_csd = np.sqrt(mag_diff ** 2 + phase_diff ** 2)
+
+            # Subtract running mean to remove phase noise floor,
+            # then half-wave rectify so only spikes remain
+            if self._running_mean is None:
+                self._running_mean = raw_csd.copy()
+            else:
+                self._running_mean += self._alpha * (raw_csd - self._running_mean)
+
+            complex_flux = np.maximum(
+                raw_csd - self._running_mean, 0.0
+            ).astype(np.float32)
+        else:
+            complex_flux = np.zeros_like(mag)
+
+        self._prev_prev_phase = self._prev_phase
+        self._prev_phase = phase.copy()
+        self._prev_magnitude = mag.copy()
+
+        return SpectrumFrame(
+            magnitude=frame.magnitude,
+            flux=complex_flux,
+            waveform=frame.waveform,
+            phase=frame.phase,
+            zcr=frame.zcr,
+        )
+
+    def reset(self) -> None:
+        self._prev_phase = None
+        self._prev_prev_phase = None
+        self._prev_magnitude = None
+        self._running_mean = None
 
 
 class PercussiveTransform(SpectrumTransform):
@@ -137,6 +220,7 @@ class PercussiveTransform(SpectrumTransform):
             magnitude=(frame.magnitude * pmask).astype(np.float32),
             flux=(frame.flux * np.sqrt(pmask)).astype(np.float32),
             waveform=frame.waveform,
+            phase=frame.phase,
             zcr=frame.zcr,
         )
 

@@ -2,13 +2,13 @@
 
 A "break" is a sustained period where energy drops well below average —
 the moment in a song where the beat drops out. Unlike the old drop detector
-which fired on kick return, this exposes a continuous `breaking` state
+which fired on low-band onset return, this exposes a continuous `breaking` state
 that drives exponential morph slowdown in the visual axes.
 
 Detection requires:
   - Energy (centroid_rms) below DROP_ENERGY_RATIO × running average
   - Sustained for QUIET_THRESHOLD_FRAMES
-  - At least MIN_KICKS_BEFORE_DROP kicks have occurred (not song start)
+  - At least MIN_LOWS_BEFORE_DROP low-band onsets have occurred (not song start)
   - Not in drift mode (sustained silence with no music)
   - Cooldown period after a break ends
 """
@@ -34,7 +34,7 @@ class DropDetector:
         from .tempo_scaler import TempoScaler
         return TempoScaler().beats_to_frames(self._bpm or 120.0, cfg.breaks.activation_window)
     @property
-    def MIN_KICKS_BEFORE_DROP(self) -> int: return cfg.breaks.min_kicks_before_break
+    def MIN_LOWS_BEFORE_DROP(self) -> int: return cfg.breaks.min_lows_before_break
     @property
     def BREAK_COOLDOWN(self) -> float: return cfg.breaks.cooldown
     @property
@@ -42,7 +42,7 @@ class DropDetector:
 
     def __init__(self) -> None:
         self._quiet_frames = 0
-        self._total_kicks = 0
+        self._total_lows = 0
         self._cooldown = 0.0
         self._centroid_rms_avg = 0.0
         self._warmup_frames = 0
@@ -53,7 +53,7 @@ class DropDetector:
     def reset(self) -> None:
         """Reset state — call on song change."""
         self._quiet_frames = 0
-        self._total_kicks = 0
+        self._total_lows = 0
         self._cooldown = 0.0
         self._centroid_rms_avg = 0.0
         self.breaking = False
@@ -74,11 +74,11 @@ class DropDetector:
         is_quiet = (centroid_rms < self._centroid_rms_avg * self.DROP_ENERGY_RATIO
                     and self._centroid_rms_avg > 1e-6)
 
-        has_kick = any(e.kind == 'kick' for e in events)
+        has_low = any(e.kind == 'low' for e in events)
 
-        if has_kick:
-            self._total_kicks += 1
-            # Break ends on kick return
+        if has_low:
+            self._total_lows += 1
+            # Break ends on low-band onset return
             if self.breaking:
                 log.info(f'[BREAK END] after {self._quiet_frames} quiet frames')
                 self._cooldown = self.BREAK_COOLDOWN
@@ -87,7 +87,7 @@ class DropDetector:
         elif is_quiet:
             self._quiet_frames += 1
         else:
-            # Energy recovered without a kick — break ends
+            # Energy recovered without a low-band onset — break ends
             if self.breaking:
                 self._cooldown = self.BREAK_COOLDOWN
                 self.breaking = False
@@ -96,7 +96,7 @@ class DropDetector:
         # Activate break when quiet long enough
         if (not self.breaking
                 and self._quiet_frames >= self.QUIET_THRESHOLD_FRAMES
-                and self._total_kicks > self.MIN_KICKS_BEFORE_DROP
+                and self._total_lows > self.MIN_LOWS_BEFORE_DROP
                 and self._cooldown <= 0
                 and not drifting):
             self.breaking = True

@@ -2,7 +2,7 @@
 
 Runs a separate FFT per octave, each with a window length matched to
 the frequency range. Low octaves get long windows (high frequency
-resolution for kick/bass separation). High octaves get short windows
+resolution for low-band/bass separation). High octaves get short windows
 (high time resolution for transient detection).
 
 This is conceptually equivalent to a streaming CQT but implemented as

@@ -26,7 +26,7 @@ CONFIG_PATH = Path.home() / '.config' / 'flame-sheep' / 'audio.toml'
 DEFAULTS = {
     'detection': {
         'base_threshold': 1.5,          # flux multiplier (future: Percentile)
-        'kick_threshold': 3.5,          # kick flux multiplier (future: Percentile)
+        'low_threshold': 3.5,           # low-band flux multiplier (future: Percentile)
         'cooldown': 0.25,               # beats — unified cooldown (1/16th note)
         'stability_scaling': 1.0,       # stability → threshold scaling (raw float)
         'sharpness': 3.0,              # attack sharpness gate (future: Percentile)
@@ -79,7 +79,7 @@ DEFAULTS = {
         'bass_activation_window': 1.5,      # beats — sub-bass quiet time
         'drop_energy_ratio': 0.15,          # ratio (future: Percentile)
         'subbass_drop_ratio': 0.10,         # ratio (future: Percentile)
-        'min_kicks_before_break': 8,        # count — prevent false triggers on intros
+        'min_lows_before_break': 8,         # count — prevent false triggers on intros
         'cooldown': 15.0,                   # seconds — time after break ends
     },
     'adaptive': {

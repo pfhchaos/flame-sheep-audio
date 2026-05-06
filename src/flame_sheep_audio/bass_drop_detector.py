@@ -1,7 +1,7 @@
 """Bass break detector — detects sub-bass energy dropout.
 
 Complements the EDM DropDetector which tracks full centroid_rms silence.
-This detector catches pop/rock-style breaks where kick and bass disappear
+This detector catches pop/rock-style breaks where low-band and bass disappear
 but vocals and mids continue — the sub-bass vanishes while centroid_rms
 stays high.
 
@@ -30,7 +30,7 @@ class BassDropDetector:
         from .tempo_scaler import TempoScaler
         return TempoScaler().beats_to_frames(self._bpm or 120.0, cfg.breaks.bass_activation_window)
     @property
-    def MIN_KICKS_BEFORE_DROP(self) -> int: return cfg.breaks.min_kicks_before_break
+    def MIN_LOWS_BEFORE_DROP(self) -> int: return cfg.breaks.min_lows_before_break
     @property
     def BREAK_COOLDOWN(self) -> float: return cfg.breaks.cooldown
     @property
@@ -38,7 +38,7 @@ class BassDropDetector:
 
     def __init__(self) -> None:
         self._quiet_frames = 0
-        self._total_kicks = 0
+        self._total_lows = 0
         self._cooldown = 0.0
         self._subbass_avg = 0.0
         self._warmup_frames = 0
@@ -49,7 +49,7 @@ class BassDropDetector:
     def reset(self) -> None:
         """Reset state — call on song change."""
         self._quiet_frames = 0
-        self._total_kicks = 0
+        self._total_lows = 0
         self._cooldown = 0.0
         self._subbass_avg = 0.0
         self.breaking = False
@@ -71,10 +71,10 @@ class BassDropDetector:
         is_bass_quiet = (subbass_rms < self._subbass_avg * self.SUBBASS_DROP_RATIO
                          and self._subbass_avg > 1e-6)
 
-        has_kick = any(e.kind == 'kick' for e in events)
+        has_low = any(e.kind == 'low' for e in events)
 
-        if has_kick:
-            self._total_kicks += 1
+        if has_low:
+            self._total_lows += 1
             if self.breaking:
                 log.info(f'[BASS BREAK END] after {self._quiet_frames} quiet frames')
                 self._cooldown = self.BREAK_COOLDOWN
@@ -90,7 +90,7 @@ class BassDropDetector:
 
         if (not self.breaking
                 and self._quiet_frames >= self.QUIET_THRESHOLD_FRAMES
-                and self._total_kicks > self.MIN_KICKS_BEFORE_DROP
+                and self._total_lows > self.MIN_LOWS_BEFORE_DROP
                 and self._cooldown <= 0
                 and not drifting):
             self.breaking = True

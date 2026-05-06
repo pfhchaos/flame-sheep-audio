@@ -1,9 +1,9 @@
 """Onset density tracker — per-band onset rate as a continuous feature.
 
 Tracks how many onsets per second are arriving in each band.
-At normal tempos (120 BPM), kick density is ~2/s.  At speedcore
+At normal tempos (120 BPM), low-band density is ~2/s.  At speedcore
 (270+ BPM), it's 4-5/s.  Axes can use this to smoothly blend
-behavior rather than counting individual kicks.
+behavior rather than counting individual onsets.
 
 Maintains two smoothing rates:
   - fast: for visualization output (Seconds(0.1), responsive)
