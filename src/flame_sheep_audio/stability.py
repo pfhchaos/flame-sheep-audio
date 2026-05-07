@@ -149,6 +149,7 @@ class _StabilityMedian(StabilityMethod):
         self._filled = 0
         self._n_bins: int = 0
         self._harmonic_mask: np.ndarray | None = None
+        self._sustained: np.ndarray | None = None  # time-median magnitude
         self._cached_stability: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
@@ -157,32 +158,31 @@ class _StabilityMedian(StabilityMethod):
             self._n_bins = n_bins
             self._buf = np.zeros((self._kt, n_bins), dtype=np.float32)
             self._harmonic_mask = np.full(n_bins, 0.5, dtype=np.float32)
+            self._sustained = np.zeros(n_bins, dtype=np.float32)
         # Write new frame to circular buffer
         self._buf[self._pos] = magnitude
         self._pos = (self._pos + 1) % self._kt
         self._filled = min(self._filled + 1, self._kt)
 
-        # Time median: per-bin median across buffer → harmonic
+        # Time median: per-bin median across buffer → sustained magnitude
         active = self._buf[:self._filled] if self._filled < self._kt else self._buf
         h_median = np.median(active, axis=0)
+        self._sustained = h_median.astype(np.float32)
 
         # Frequency median: sliding median along frequency for current frame
-        # Use a simple approach: pad and compute with stride tricks
         half_k = self._kf // 2
         padded = np.pad(magnitude, half_k, mode='reflect')
-        # Vectorized sliding window median
         windows = np.lib.stride_tricks.sliding_window_view(padded, self._kf)
         p_median = np.median(windows, axis=1).astype(np.float32)
 
         # Soft mask: harmonic / (harmonic + percussive + eps)
         total = h_median + p_median
-        # Silence: both medians near zero → default to 1.0 (stable)
         self._harmonic_mask = np.where(
             total > 1e-10,
             h_median / (total + 1e-10),
             1.0,
         ).astype(np.float32)
-        self._cached_stability = None  # invalidate cache
+        self._cached_stability = None
 
     def band_stability(self, mask: np.ndarray) -> float:
         """Mean harmonic mask value in band."""
@@ -200,12 +200,15 @@ class _StabilityMedian(StabilityMethod):
         return self._cached_stability
 
     def harmonic_rms(self, magnitude: np.ndarray, mask: np.ndarray) -> float:
-        """RMS weighted by harmonic mask."""
-        if not mask.any() or self._harmonic_mask is None:
+        """RMS of sustained (time-median) magnitude in band."""
+        if not mask.any() or self._sustained is None:
             return 0.0
-        weighted = magnitude * self._harmonic_mask
-        band = weighted[mask]
+        band = self._sustained[mask]
         return float(np.sqrt(np.mean(band ** 2)))
+
+    def sustained_magnitude(self) -> np.ndarray | None:
+        """Per-bin sustained magnitude (time median). None before first update."""
+        return self._sustained
 
     def reset(self) -> None:
         self._n_bins = 0
@@ -242,24 +245,18 @@ class _StabilityShape(StabilityMethod):
     def update(self, magnitude: np.ndarray) -> None:
         if self._n_bins == 0:
             self._n_bins = len(magnitude)
-        spec_norm = np.linalg.norm(magnitude)
-        if spec_norm < 1e-10:
-            return
-
-        normalized = magnitude / spec_norm
 
         if self._shape_ema is None:
-            self._shape_ema = normalized.copy()
+            self._shape_ema = magnitude.copy()
             self._harmonic_mask = np.full(self._n_bins, 0.5, dtype=np.float32)
             return
 
         # Sliding window cosine distance between current and EMA
+        # Uses raw magnitudes so magnitude changes (attacks) are detected
         half_k = self._kernel // 2
-        # Pad both signals
-        cur_pad = np.pad(normalized, half_k, mode='reflect')
+        cur_pad = np.pad(magnitude, half_k, mode='reflect')
         ema_pad = np.pad(self._shape_ema, half_k, mode='reflect')
 
-        # Sliding dot product via convolution-like approach
         cur_windows = np.lib.stride_tricks.sliding_window_view(cur_pad, self._kernel)
         ema_windows = np.lib.stride_tricks.sliding_window_view(ema_pad, self._kernel)
 
@@ -270,21 +267,20 @@ class _StabilityShape(StabilityMethod):
         cos_sim = dots / (cur_norms * ema_norms + 1e-10)
 
         # Convert similarity to stability mask (0 = percussive, 1 = harmonic)
-        # cos_sim is already 0-1 for non-negative spectra
-        self._harmonic_mask = np.clip(cos_sim, 0.0, 1.0).astype(np.float32)
+        # Sigmoid sharpening: small drops in similarity → large drops in mask
+        # Centers at 0.95 so anything below ~0.9 reads as fully percussive
+        cos_clipped = np.clip(cos_sim, 0.0, 1.0)
+        sharpness = 40.0
+        center = 0.95
+        self._harmonic_mask = (1.0 / (1.0 + np.exp(-sharpness * (cos_clipped - center)))).astype(np.float32)
 
         # Silence: if both patches are near-zero, default to harmonic
         n = len(magnitude)
-        silent_bins = (cur_norms < 1e-8) & (ema_norms < 1e-8)
-        self._harmonic_mask[silent_bins[:n]] = 1.0
+        silent_bins = (cur_norms[:n] < 1e-8) & (ema_norms[:n] < 1e-8)
+        self._harmonic_mask[silent_bins] = 1.0
 
-        # Update shape EMA (re-normalize)
-        raw_ema = self._alpha * self._shape_ema + (1 - self._alpha) * normalized
-        ema_norm = np.linalg.norm(raw_ema)
-        if ema_norm > 1e-10:
-            self._shape_ema = raw_ema / ema_norm
-        else:
-            self._shape_ema = normalized.copy()
+        # Update EMA (no normalization — track raw magnitudes)
+        self._shape_ema = self._alpha * self._shape_ema + (1 - self._alpha) * magnitude
 
     def band_stability(self, mask: np.ndarray) -> float:
         if not mask.any() or self._harmonic_mask is None:

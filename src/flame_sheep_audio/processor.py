@@ -111,6 +111,7 @@ class AudioProcessor:
         self._lock     = threading.Lock()
         self._spectrum: np.ndarray | None = None
         self._stability_bins: np.ndarray | None = None
+        self._sustained_bins: np.ndarray | None = None
         self._waveform: np.ndarray | None = None
         self._centroid = 1000.0
         self._centroid_delta = 0.0
@@ -233,6 +234,12 @@ class AudioProcessor:
                     self._stability_bins = stab_bins.copy()
                 else:
                     self._stability_bins[:] = stab_bins
+                sust = getattr(self._stability, 'sustained_magnitude', lambda: None)()
+                if sust is not None:
+                    if self._sustained_bins is None:
+                        self._sustained_bins = sust.copy()
+                    else:
+                        self._sustained_bins[:] = sust
                 if self._waveform is None or self._waveform.shape != frame.waveform.shape:
                     self._waveform = frame.waveform.copy()
                 else:
@@ -330,6 +337,7 @@ class AudioProcessor:
             events=events,
             spectrum=self._spectrum.copy() if self._spectrum is not None else empty.copy(),
             stability=self._stability_bins.copy() if self._stability_bins is not None else empty.copy(),
+            sustained=self._sustained_bins.copy() if self._sustained_bins is not None else empty.copy(),
             waveform=self._waveform.copy() if self._waveform is not None else np.zeros(HOP_SIZE, dtype=np.float32),
             bands=bands,
             centroid=self._centroid,
@@ -400,6 +408,12 @@ class AudioProcessor:
                 self._stability_bins = stab_bins.copy()
             else:
                 self._stability_bins[:] = stab_bins
+            sust = getattr(self._stability, 'sustained_magnitude', lambda: None)()
+            if sust is not None:
+                if self._sustained_bins is None:
+                    self._sustained_bins = sust.copy()
+                else:
+                    self._sustained_bins[:] = sust
             if self._waveform is None or self._waveform.shape != frame.waveform.shape:
                 self._waveform = frame.waveform.copy()
             else:

@@ -39,6 +39,7 @@ DEFAULTS = {
 
         'hpss_time_window': 1.0,   # beats of history for HPSS time median
         'hpss_freq_kernel': 15,    # bins for HPSS frequency median (not tempo-scaled)
+        'shape_kernel': 7,         # bins for shape cosine similarity window
     },
     'energy': {
         'rms_smoothing': 0.1,              # seconds — band RMS output smoothing
