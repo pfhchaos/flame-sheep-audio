@@ -49,7 +49,7 @@ class AudioState:
     """
     events: list[BeatEvent] = field(default_factory=list)
 
-    # Spectrum (log-magnitude, for viz-side analysis via response library)
+    # Spectrum (linear magnitude, for viz-side analysis via response library)
     spectrum: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
 
     # Per-band metrics (names determined by BandConfig)

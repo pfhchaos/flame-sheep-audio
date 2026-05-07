@@ -19,7 +19,7 @@ from collections.abc import Callable
 import numpy as np
 import sounddevice as sd
 
-from ._constants import SAMPLE_RATE, FFT_SIZE, N_BINS, HOP_SIZE
+from ._constants import SAMPLE_RATE, FFT_SIZE, N_BINS, HOP_SIZE, FREQS
 from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
 from ._spectrum import SpectrumEngine
 from .beat_detector import FluxBeatDetector
@@ -65,6 +65,7 @@ class AudioProcessor:
                 self._spectrum_engine = OctaveBankEngine()
         # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
+        self._bin_freqs = freqs if freqs is not None else FREQS
 
         # Log-magnitude transform: models human loudness perception
         from .hpss import LogMagnitudeTransform, PercussiveTransform, ComplexSpectralDiffTransform
@@ -486,6 +487,11 @@ class AudioProcessor:
             return self._spectrum.copy()
 
     @property
+    def bin_freqs(self) -> np.ndarray:
+        """Bin center frequencies in Hz (matches spectrum array length)."""
+        return self._bin_freqs
+
+    @property
     def waveform(self) -> np.ndarray:
         """Latest raw PCM window. For GPU texture upload if desired."""
         with self._lock:
@@ -611,6 +617,10 @@ class SyntheticAudioProcessor:
             bands=bands,
             mode='beat',  # synthetic audio simulates music
         )
+
+    @property
+    def bin_freqs(self) -> np.ndarray:
+        return FREQS[:self._n_bins]
 
     @property
     def spectrum(self) -> np.ndarray:
