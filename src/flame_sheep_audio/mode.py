@@ -49,8 +49,8 @@ RMS_THRESHOLD = 0.0001       # broadband RMS below this = silence
 class ModeDetector:
     """Determines the current audio mode from continuous features.
 
-    Does NOT own any genome/morph state — that stays in DriftMode and
-    GenomeAxis. This class only decides which mode is active.
+    Does NOT own any genome/morph state — that stays in GenomeAxis.
+    This class only decides which mode is active.
     """
 
     def __init__(self) -> None:
