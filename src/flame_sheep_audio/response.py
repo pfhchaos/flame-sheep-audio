@@ -192,9 +192,10 @@ class MelCentroid:
         freqs: Bin center frequencies in Hz (from engine).
     """
 
-    __slots__ = ('_mel_freqs', '_valid_mask')
+    __slots__ = ('_mel_freqs', '_valid_mask', '_n_bins')
 
     def __init__(self, freqs: np.ndarray) -> None:
+        self._n_bins = len(freqs)
         # Precompute mel frequencies, masking DC bin (0 Hz)
         self._valid_mask = freqs > 0
         safe_freqs = np.where(self._valid_mask, freqs, 1.0)
@@ -212,6 +213,11 @@ class MelCentroid:
         if mag_sum < 1e-10:
             return 0.0
         return float(np.dot(mel, mag) / mag_sum)
+
+    @property
+    def n_bins(self) -> int:
+        """Number of frequency bins this centroid was built for."""
+        return self._n_bins
 
     @staticmethod
     def mel_to_hz(mel_value: float) -> float:

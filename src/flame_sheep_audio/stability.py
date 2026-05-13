@@ -78,10 +78,11 @@ class _StabilityEMA(StabilityMethod):
         self._cached_stability: np.ndarray | None = None
 
     def update(self, magnitude: np.ndarray) -> None:
-        if self._mag_ema is None:
+        if self._mag_ema is None or len(magnitude) != self._n_bins:
             self._n_bins = len(magnitude)
             self._mag_ema = np.zeros_like(magnitude)
             self._mag_var = np.zeros_like(magnitude)
+            self._cached_stability = None
         diff = magnitude - self._mag_ema
         self._mag_ema = self._alpha * self._mag_ema + (1 - self._alpha) * magnitude
         diff2 = magnitude - self._mag_ema  # post-update residual (Welford)
@@ -154,11 +155,14 @@ class _StabilityMedian(StabilityMethod):
 
     def update(self, magnitude: np.ndarray) -> None:
         n_bins = len(magnitude)
-        if self._buf is None:
+        if self._buf is None or n_bins != self._n_bins:
             self._n_bins = n_bins
             self._buf = np.zeros((self._kt, n_bins), dtype=np.float32)
+            self._pos = 0
+            self._filled = 0
             self._harmonic_mask = np.full(n_bins, 0.5, dtype=np.float32)
             self._sustained = np.zeros(n_bins, dtype=np.float32)
+            self._cached_stability = None
         # Write new frame to circular buffer
         self._buf[self._pos] = magnitude
         self._pos = (self._pos + 1) % self._kt
@@ -243,8 +247,11 @@ class _StabilityShape(StabilityMethod):
         self._n_bins: int = 0
 
     def update(self, magnitude: np.ndarray) -> None:
-        if self._n_bins == 0:
-            self._n_bins = len(magnitude)
+        n_bins = len(magnitude)
+        if n_bins != self._n_bins:
+            self._n_bins = n_bins
+            self._shape_ema = None
+            self._harmonic_mask = None
 
         if self._shape_ema is None:
             self._shape_ema = magnitude.copy()

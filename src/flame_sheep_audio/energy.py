@@ -183,7 +183,7 @@ class EnergyAnalyzer:
         spec_norm = np.linalg.norm(spectrum)
         if spec_norm > 1e-10:
             normalized = spectrum / spec_norm
-            if self._shape_ema is None:
+            if self._shape_ema is None or len(self._shape_ema) != len(normalized):
                 self._shape_ema = normalized.copy()
             else:
                 # Distance from current frame to the running average shape

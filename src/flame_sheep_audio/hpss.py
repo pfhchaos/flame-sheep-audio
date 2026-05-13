@@ -68,7 +68,7 @@ class LogMagnitudeTransform(SpectrumTransform):
         log_mag = (np.log1p(self._gain * frame.magnitude) * self._norm).astype(np.float32)
 
         # Recompute flux on log magnitudes
-        if self._prev_log_mag is not None:
+        if self._prev_log_mag is not None and len(log_mag) == len(self._prev_log_mag):
             log_flux = np.maximum(log_mag - self._prev_log_mag, 0.0).astype(np.float32)
         else:
             log_flux = np.zeros_like(log_mag)
@@ -149,6 +149,10 @@ class ComplexSpectralDiffTransform(SpectrumTransform):
 
         phase = frame.phase
         mag = frame.magnitude
+
+        # Auto-reset on spectrum size change
+        if self._prev_phase is not None and len(mag) != len(self._prev_phase):
+            self.reset()
 
         if self._prev_phase is not None and self._prev_prev_phase is not None:
             # Phase deviation (2nd derivative)
