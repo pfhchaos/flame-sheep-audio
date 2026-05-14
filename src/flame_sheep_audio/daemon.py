@@ -15,10 +15,10 @@ from __future__ import annotations
 import argparse
 import atexit
 import logging
+import os
 import signal
 import sys
 import time
-from multiprocessing.shared_memory import SharedMemory
 
 from .shm_layout import (
     SHM_NAME, SHM_SIZE,
@@ -54,10 +54,20 @@ class AudioDaemon:
         self._band_config = default_band_config()
         n_bins = engine.n_bins
 
-        # Shared memory
-        self._shm = SharedMemory(name=SHM_NAME, create=True, size=SHM_SIZE)
+        # Shared memory — use /dev/shm directly to avoid multiprocessing
+        # resource tracker, which can unlink shm from other processes on crash.
+        import mmap as _mmap
+        self._shm_path = f'/dev/shm/{SHM_NAME}'
+        # Clean up stale shm file
+        if os.path.exists(self._shm_path):
+            os.unlink(self._shm_path)
+        fd = os.open(self._shm_path, os.O_CREAT | os.O_RDWR, 0o666)
+        os.ftruncate(fd, SHM_SIZE)
+        self._mmap = _mmap.mmap(fd, SHM_SIZE)
+        os.close(fd)
+
         self._layout = compute_layout(n_bins, list(self._band_config.all_band_names))
-        self._writer = ShmWriter(self._layout, self._shm.buf)
+        self._writer = ShmWriter(self._layout, self._mmap)
         atexit.register(self._cleanup)
 
         # D-Bus service
@@ -115,8 +125,11 @@ class AudioDaemon:
     def _cleanup(self) -> None:
         """Cleanup shared memory on exit."""
         try:
-            self._shm.close()
-            self._shm.unlink()
+            self._mmap.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(self._shm_path)
         except Exception:
             pass
 
