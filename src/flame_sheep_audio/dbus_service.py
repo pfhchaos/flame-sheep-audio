@@ -53,7 +53,7 @@ class AudioDbusService:
 
             DBusGMainLoop(set_as_default=True)
             bus = dbus.SessionBus()
-            dbus.service.BusName(BUS_NAME, bus)
+            self._bus_name = dbus.service.BusName(BUS_NAME, bus)
 
             # Define the service object inline (needs dbus imported)
             schema_json = self._schema_json
