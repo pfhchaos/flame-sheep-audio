@@ -89,10 +89,7 @@ class AudioDaemon:
 
         try:
             while self._running:
-                snap = self._processor.drain()
-                if snap is None:
-                    time.sleep(0.005)
-                    continue
+                snap = self._processor.drain_blocking(timeout=0.1)
 
                 # Write continuous state to shmem
                 self._writer.write_snapshot(snap)
@@ -107,9 +104,6 @@ class AudioDaemon:
                 if abs(snap.bpm - self._last_bpm) > 1.0:
                     self._last_bpm = snap.bpm
                     self._dbus.emit_tempo_update(snap.bpm, snap.tempo_confidence)
-
-                # Sleep to match analysis cadence (~10ms)
-                time.sleep(0.005)
 
         except KeyboardInterrupt:
             log.info('audio daemon interrupted')

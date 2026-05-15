@@ -110,6 +110,7 @@ class AudioProcessor:
 
         # Shared state (lock-protected, read by drain(), written by audio thread or process())
         self._lock     = threading.Lock()
+        self._data_ready = threading.Condition(self._lock)
         self._spectrum: np.ndarray | None = None
         self._stability_bins: np.ndarray | None = None
         self._sustained_bins: np.ndarray | None = None
@@ -224,7 +225,7 @@ class AudioProcessor:
             self._density.update(now)
             self._detector._bpm = self._tempo.effective_bpm
 
-            with self._lock:
+            with self._data_ready:
                 self._pending_events.extend(events)
                 if self._spectrum is None:
                     self._spectrum = frame.magnitude.copy()
@@ -309,6 +310,7 @@ class AudioProcessor:
                         self._bass_drop_detector.break_intensity)
                 else:
                     self._break_intensity = 0.0
+                self._data_ready.notify_all()
 
     def drain(self) -> AudioSnapshot:
         """Atomically read and clear accumulated audio state.
@@ -321,6 +323,22 @@ class AudioProcessor:
             return self._build_snapshot(events)
 
         with self._lock:
+            snap = self._build_snapshot(self._pending_events)
+            self._pending_events = []
+            return snap
+
+    def drain_blocking(self, timeout: float = 0.1) -> AudioSnapshot:
+        """Block until the audio thread produces new data, then drain.
+
+        Uses a condition variable to avoid polling. Falls back to
+        regular drain after timeout.
+        """
+        if not self._threaded:
+            events = self.process()
+            return self._build_snapshot(events)
+
+        with self._data_ready:
+            self._data_ready.wait(timeout=timeout)
             snap = self._build_snapshot(self._pending_events)
             self._pending_events = []
             return snap
