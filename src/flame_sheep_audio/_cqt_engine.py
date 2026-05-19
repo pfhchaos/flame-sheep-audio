@@ -64,19 +64,18 @@ class CqtEngine(SpectrumEngineBase):
 
     def push_hop(self, hop: np.ndarray) -> SpectrumFrame:
         """Feed one hop of audio and return a SpectrumFrame."""
-        # rt-cqt expects list of doubles
+        # rt-cqt expects list of doubles (tolist is faster than numpy passthrough)
         self._cqt.inputBlock(hop.astype(np.float64).tolist(), len(hop))
 
-        # Extract magnitudes and phase from all octaves
+        # Extract magnitudes and phase from all octaves (vectorized per octave)
         magnitude = np.zeros(self.n_bins, dtype=np.float32)
         phase = np.zeros(self.n_bins, dtype=np.float32)
         for cqt_oct in range(self._n_octaves):
             our_oct = self._n_octaves - 1 - cqt_oct
-            vals = self._cqt.getOctaveValues(cqt_oct)
+            vals = np.array(self._cqt.getOctaveValues(cqt_oct))
             start = our_oct * self._bpo
-            for i, v in enumerate(vals):
-                magnitude[start + i] = abs(v)
-                phase[start + i] = np.angle(v)
+            magnitude[start:start + self._bpo] = np.abs(vals)
+            phase[start:start + self._bpo] = np.angle(vals)
 
         # Flux
         if self._prev_spectrum is not None:
