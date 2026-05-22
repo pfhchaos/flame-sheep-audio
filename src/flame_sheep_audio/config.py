@@ -35,6 +35,20 @@ DEFAULTS = {
         'sharpness': 3.0,              # attack sharpness gate (future: Percentile)
         'min_flux': 1e-7,              # absolute noise floor
     },
+    'detector': {
+        # Which beat detector implementation the daemon uses.
+        # 'percentile' = PercentileBeatDetector (default; current production)
+        # 'flux'       = FluxBeatDetector (legacy; still selectable)
+        # 'rnn'        = BeatRNNDetector (trained continuous-activation model)
+        'kind': 'percentile',
+        # RNN-specific config. Only consulted when kind == 'rnn'.
+        # Empty string = error at construction; caller must supply a path.
+        'rnn_weights_path': '',
+        'rnn_threshold': 0.3,
+        'rnn_min_peak_distance_frames': 9,   # ~100 ms at 93.75 fps
+        'rnn_lookahead_frames': 9,            # ~100 ms causal latency
+        'rnn_auto_reset_frames': 256,         # match training regime
+    },
     'stability': {
         'method': 'median',        # 'ema', 'median' (causal HPSS), or 'shape' (experimental)
         'hpss_ema_window': 0.5,    # beats — 95% decay window for fast stability EMA
@@ -122,7 +136,11 @@ class Config:
     """Global configuration with dot-access and hot reload."""
 
     def __init__(self) -> None:
-        self._data: dict[str, Any] = dict(DEFAULTS)
+        # Deep-copy so mutations to self._data (e.g. cfg._data['detector']
+        # ['kind'] = 'rnn' in tests, or per-instance overrides) don't
+        # leak back into the global DEFAULTS dict.
+        import copy
+        self._data: dict[str, Any] = copy.deepcopy(DEFAULTS)
         self._ns: SimpleNamespace = _to_namespace(self._data)
         self._reload_callbacks: list[Callable[[], None]] = []
         self._load_user_config()
@@ -144,7 +162,8 @@ class Config:
 
     def reload(self) -> None:
         """Re-read config from disk and notify listeners."""
-        self._data = dict(DEFAULTS)
+        import copy
+        self._data = copy.deepcopy(DEFAULTS)
         self._ns = _to_namespace(self._data)
         self._load_user_config()
         log.info('Audio config reloaded')

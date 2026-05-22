@@ -78,10 +78,7 @@ class AudioProcessor:
         # not for beat detection (CSD handles onset detection directly)
         self._percussive = PercussiveTransform()
 
-        from .beat_detector import PercentileBeatDetector
-        self._detector = PercentileBeatDetector(percentile=99.0,
-                                                band_config=band_config,
-                                                freqs=freqs)
+        self._detector = self._build_detector(band_config, freqs)
         self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
         self._density = OnsetDensityTracker(band_config=band_config)
 
@@ -135,6 +132,45 @@ class AudioProcessor:
         # Thread state
         self._thread: threading.Thread | None = None
         self._running = False
+
+    def _build_detector(self, band_config, freqs):
+        """Construct the configured beat detector. Reads `cfg.detector.kind`
+        and dispatches to the corresponding class. Falls back to
+        PercentileBeatDetector if kind is unknown (with a warning) so
+        misconfigurations don't take the daemon down at startup."""
+        from .beat_detector import (
+            PercentileBeatDetector, FluxBeatDetector,
+        )
+        kind = getattr(cfg.detector, 'kind', 'percentile')
+        if kind == 'percentile':
+            return PercentileBeatDetector(percentile=99.0,
+                                          band_config=band_config,
+                                          freqs=freqs)
+        if kind == 'flux':
+            return FluxBeatDetector(band_config=band_config, freqs=freqs)
+        if kind == 'rnn':
+            from .beat_rnn import BeatRNNDetector
+            weights_path = getattr(cfg.detector, 'rnn_weights_path', '')
+            if not weights_path:
+                raise ValueError(
+                    'detector.kind="rnn" requires detector.rnn_weights_path '
+                    'to be set in config (path to beat_rnn_continuous.npz)')
+            return BeatRNNDetector(
+                weights_path,
+                threshold=float(getattr(cfg.detector, 'rnn_threshold', 0.3)),
+                min_peak_distance_frames=int(getattr(
+                    cfg.detector, 'rnn_min_peak_distance_frames', 9)),
+                lookahead_frames=int(getattr(
+                    cfg.detector, 'rnn_lookahead_frames', 9)),
+                auto_reset_frames=int(getattr(
+                    cfg.detector, 'rnn_auto_reset_frames', 256)),
+            )
+        import logging
+        logging.getLogger(__name__).warning(
+            'unknown detector.kind=%r — falling back to percentile', kind)
+        return PercentileBeatDetector(percentile=99.0,
+                                      band_config=band_config,
+                                      freqs=freqs)
 
     def reset_bands(self) -> None:
         """Reset adaptive bands to defaults. Call on song change."""
