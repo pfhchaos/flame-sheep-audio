@@ -14,7 +14,8 @@ from ._constants import (
 
 # Types
 from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
-from ._spectrum import SpectrumEngine, SpectrumFrame
+from ._spectrum import SpectrumFrame
+from ._cqt_engine import CqtEngine
 
 # Band configuration
 from ._band_config import BandConfig, EnergyBandDef, DetectionBandDef, default_band_config

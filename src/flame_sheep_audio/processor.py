@@ -21,7 +21,7 @@ import sounddevice as sd
 
 from ._constants import SAMPLE_RATE, FFT_SIZE, N_BINS, HOP_SIZE, FREQS
 from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
-from ._spectrum import SpectrumEngine
+from ._spectrum import SpectrumEngineBase
 from .beat_detector import FluxBeatDetector
 from .energy import EnergyAnalyzer
 from .source import PipeWireSource, FeedSource, SignalSource
@@ -48,7 +48,7 @@ class AudioProcessor:
     def __init__(self, device: str | int | None = None, adaptive: bool = False,
                  sharpness: bool = True, source: SignalSource | None = None,
                  band_config: BandConfig | None = None,
-                 spectrum_engine: SpectrumEngine | None = None):
+                 spectrum_engine: SpectrumEngineBase | None = None):
         if band_config is None:
             band_config = default_band_config()
         self._band_config = band_config
