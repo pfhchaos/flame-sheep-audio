@@ -80,20 +80,17 @@ class AudioProcessor:
 
         self._detector = self._build_detector(band_config, freqs)
 
-        # Source-level AGC, applied to PCM after read() but before any
-        # analysis. Opt-in via cfg.agc.enabled. Normalizes mastering +
-        # listener-volume differences so detectors see a consistent
-        # level baseline. See flame_sheep_audio._agc for design.
-        self._agc = None
-        if getattr(cfg.agc, 'enabled', False):
-            from ._agc import AudioLevelAgc
-            self._agc = AudioLevelAgc(
-                sample_rate=SAMPLE_RATE,
-                target_rms=float(cfg.agc.target_rms),
-                noise_floor=float(cfg.agc.noise_floor),
-                time_constant_sec=float(cfg.agc.time_constant_sec),
-                save_interval_sec=float(cfg.agc.save_interval_sec),
-            )
+        # Source-level AGC applied to PCM after read() but before any
+        # analysis. Not optional — signal conditioning, like the FFT
+        # window or the rfft itself. See flame_sheep_audio._agc.
+        from ._agc import AudioLevelAgc
+        self._agc = AudioLevelAgc(
+            sample_rate=SAMPLE_RATE,
+            target_rms=float(cfg.agc.target_rms),
+            noise_floor=float(cfg.agc.noise_floor),
+            time_constant_sec=float(cfg.agc.time_constant_sec),
+            save_interval_sec=float(cfg.agc.save_interval_sec),
+        )
         self._energy = EnergyAnalyzer(band_config=band_config, freqs=freqs)
         self._density = OnsetDensityTracker(band_config=band_config)
 
@@ -246,8 +243,7 @@ class AudioProcessor:
             hop = self._source.read_hop(HOP_SIZE)
             if hop is None:
                 break  # source stopped
-            if self._agc is not None:
-                hop = self._agc.process(hop)
+            hop = self._agc.process(hop)
 
             now = time.perf_counter()
             raw_frame = self._spectrum_engine.push_hop(hop)
@@ -441,8 +437,7 @@ class AudioProcessor:
         pcm = self._source.read()
         if pcm is None:
             return []
-        if self._agc is not None:
-            pcm = self._agc.process(pcm)
+        pcm = self._agc.process(pcm)
 
         raw_frame = self._spectrum_engine.compute(pcm)
 

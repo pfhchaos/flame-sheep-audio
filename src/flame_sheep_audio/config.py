@@ -36,13 +36,11 @@ DEFAULTS = {
         'min_flux': 1e-7,              # absolute noise floor
     },
     'agc': {
-        # Source-level auto-gain. Normalizes incoming PCM so downstream
-        # detectors (BeatRNN especially) see the level baseline they
-        # were calibrated for, regardless of system volume / mastering.
-        # Off by default for safe rollout; opt-in via audio.toml until
-        # the absolute-threshold constants in the existing detectors
-        # are confirmed to behave under normalized input.
-        'enabled': False,
+        # Source-level auto-gain. Normalizes incoming PCM so detectors
+        # see a consistent level baseline regardless of system volume,
+        # mastering choices, or input device.
+        # Not optional — signal conditioning, applied unconditionally.
+        # Constants below are tuning knobs, not feature toggles.
         'target_rms': 0.1,           # ~ -20 dBFS, training-corpus typical
         'noise_floor': 0.001,        # ~ -60 dBFS, well below quiet audio
         'time_constant_sec': 120.0,  # multi-min: tracks song-master, not section dynamics
