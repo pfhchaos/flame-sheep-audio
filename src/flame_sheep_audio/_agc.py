@@ -81,6 +81,13 @@ class AudioLevelAgc:
         # Last applied gain (published for diagnostics).
         self.current_gain: float = self._compute_gain(self.slow_rms)
         self._last_save_monotonic = time.monotonic()
+        # Diagnostic: periodic gain/slow_rms log so the operator can
+        # see whether AGC has settled, where it's settled, and how it's
+        # tracking the audio's actual level. Without this, a quiet
+        # detector gives no information about whether the gain is the
+        # cause.
+        self._last_diag_monotonic = self._last_save_monotonic
+        self._diag_interval_sec = 5.0
 
     # ---- public API ----
 
@@ -125,6 +132,15 @@ class AudioLevelAgc:
                 >= self.save_interval_sec):
             self._save()
             self._last_save_monotonic = now
+
+        # 5. Periodic diagnostic log so the operator can see what the
+        # AGC is doing without instrumenting each consumer.
+        if now - self._last_diag_monotonic >= self._diag_interval_sec:
+            log.debug(
+                '[agc] slow_rms=%.4f gain=%.2f target=%.3f noise_floor=%.4f',
+                self.slow_rms, self.current_gain, self.target_rms,
+                self.noise_floor)
+            self._last_diag_monotonic = now
 
         return out
 
