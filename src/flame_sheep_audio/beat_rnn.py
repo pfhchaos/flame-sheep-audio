@@ -52,6 +52,23 @@ _PROJ_SIZE = 32
 _HIDDEN_SIZE = 48
 _N_CLASSES = 1
 
+# CQT magnitude scale correction — band-aid for prtcqt/librosa.cqt
+# normalization mismatch. The beat-RNN was trained on librosa.cqt
+# magnitudes (range ~[0, 14], processed as log1p(mag * 10)). The
+# daemon's CqtEngine wraps prtcqt and produces magnitudes ~77×
+# smaller (range ~[0, 0.18]) for the same PCM. Without correction
+# the model sees log-magnitude values ~5× compressed and operates
+# well below its trained activation range.
+#
+# 770 = (daemon→librosa scale factor: 1/0.013 = 77) × (training-
+# pipeline mag*10 multiplier). See tools/diagnose_cqt_skew.py for
+# the empirical measurement that produced these constants.
+#
+# This is a band-aid until the next retrain uses daemon CQT directly
+# (planned per docs/beat_rnn_iteration_plan.md — eliminates the
+# train/serve representation skew entirely).
+_CQT_SCALE_TO_TRAINING: float = 770.0
+
 
 def _unpack_weights(flat: np.ndarray) -> tuple:
     """Slice the flat weight vector into named arrays. Layout must match
@@ -216,10 +233,11 @@ class BeatRNNDetector(BeatDetectorBase):
                 f'BeatRNNDetector expects 108-bin magnitude (CQT), '
                 f'got shape {mag.shape}. Daemon must use CqtEngine.')
 
-        # Match training-pipeline transformation:
-        #   log_mag = log1p(mag * 10.0)
+        # Match training-pipeline transformation, with scale correction
+        # for the librosa-vs-prtcqt magnitude convention mismatch:
+        #   log_mag = log1p(mag * _CQT_SCALE_TO_TRAINING)
         #   diff = max(0, log_mag[t] - log_mag[t-1])
-        log_mag = np.log1p(mag * 10.0).astype(np.float32)
+        log_mag = np.log1p(mag * _CQT_SCALE_TO_TRAINING).astype(np.float32)
         if self._prev_log_mag is None:
             diff = np.zeros_like(log_mag)
         else:
