@@ -30,10 +30,13 @@ default settings.
 """
 from __future__ import annotations
 
+import logging
 from collections import deque
 from pathlib import Path
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 from .beat_detector import BeatDetectorBase
 from ._band_config import BandConfig, default_band_config
@@ -129,6 +132,14 @@ class BeatRNNDetector(BeatDetectorBase):
         self._h: np.ndarray = np.zeros(_HIDDEN_SIZE, dtype=np.float32)
         self._prev_log_mag: np.ndarray | None = None
         self._frames_since_reset = 0
+        # Diagnostic: track recent activations so we can periodically
+        # log what the RNN is actually producing, even when no beats
+        # are firing (zero events otherwise gives zero info on whether
+        # the threshold is too high, the model is dead, etc.).
+        self._diag_recent_activations: deque[float] = deque(maxlen=200)
+        self._diag_log_interval = 200  # frames (~2 s at 93.75 fps)
+        self._frames_since_diag_log = 0
+        self._emissions_since_diag_log = 0
 
         # Peak-picker rolling buffer of activations
         self._buffer: deque[float] = deque(maxlen=2 * self._lookahead + 1)
@@ -240,6 +251,26 @@ class BeatRNNDetector(BeatDetectorBase):
         self._frame_idx += 1
         self._frames_since_reset += 1
         self._frames_since_beat += 1
+        self._frames_since_diag_log += 1
+        self._diag_recent_activations.append(activation)
+
+        # Periodic diagnostic: report activation distribution + recent
+        # emission count. Lets you tell quickly whether 0 events means
+        # "RNN dead" vs "RNN firing low" vs "RNN firing but peak-picker
+        # rejecting" without instrumenting per-frame.
+        if self._frames_since_diag_log >= self._diag_log_interval:
+            if self._diag_recent_activations:
+                acts = np.fromiter(self._diag_recent_activations,
+                                    dtype=np.float32)
+                log.debug(
+                    '[beat_rnn diag] last %d frames: '
+                    'activation max=%.3f mean=%.3f p90=%.3f  '
+                    'threshold=%.2f  emissions=%d',
+                    len(acts), float(acts.max()), float(acts.mean()),
+                    float(np.percentile(acts, 90)),
+                    self._threshold, self._emissions_since_diag_log)
+            self._frames_since_diag_log = 0
+            self._emissions_since_diag_log = 0
 
         # Periodic hidden-state reset (matches training regime by default)
         if self._auto_reset > 0 and self._frames_since_reset >= self._auto_reset:
@@ -280,5 +311,8 @@ class BeatRNNDetector(BeatDetectorBase):
         if self._frames_since_beat < self._min_distance:
             return []
         self._frames_since_beat = 0
+        self._emissions_since_diag_log += 1
         kind = self._classify_band(self._band_flux_buffer[L])
+        log.debug('[beat_rnn] emit kind=%s activation=%.3f frame=%d',
+                  kind, center, self._frame_idx - L)
         return [BeatEvent(kind=kind, energy=center)]
