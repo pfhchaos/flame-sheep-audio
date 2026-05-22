@@ -132,10 +132,19 @@ class BeatRNNDetector(BeatDetectorBase):
 
         # Peak-picker rolling buffer of activations
         self._buffer: deque[float] = deque(maxlen=2 * self._lookahead + 1)
-        # Parallel buffer of CQT magnitudes for band-classification at
-        # the moment of emission. Same length as activation buffer.
-        self._mag_buffer: deque[np.ndarray] = deque(
+        # Parallel buffer of per-band flux for kind classification at the
+        # moment of emission. Same length as activation buffer.
+        self._band_flux_buffer: deque[dict] = deque(
             maxlen=2 * self._lookahead + 1)
+        # Per-band rolling flux history for relative-spike classification
+        # (mirrors PercentileBeatDetector's per-band history). Without
+        # this, classification falls back to absolute energy which is
+        # spectrum-density-dominated and degenerate (mid always wins
+        # because music has densest mid-band content).
+        self._band_flux_history: dict[str, deque[float]] = {
+            name: deque(maxlen=43)  # ~460 ms at 93.75 fps
+            for name in self._band_names
+        }
         # Position offset for emitted beats — running frame counter
         self._frame_idx = 0
         # Frames since last emitted beat (refractory enforcement)
@@ -149,29 +158,41 @@ class BeatRNNDetector(BeatDetectorBase):
         self._prev_log_mag = None
         self._frames_since_reset = 0
         self._buffer.clear()
-        self._mag_buffer.clear()
+        self._band_flux_buffer.clear()
+        for hist in self._band_flux_history.values():
+            hist.clear()
         self._frames_since_beat = self._min_distance
 
-    def _classify_band(self, mag: np.ndarray) -> str:
-        """Heuristic kind classification at a beat frame: pick the band
-        with the highest energy. Matches the existing detectors' band
-        layout so downstream visualizations see the same `kind` values
-        regardless of which detector produced the beat.
+    def _classify_band(self, band_flux: dict[str, float]) -> str:
+        """Pick the kind by per-band *flux* relative to that band's
+        recent history — matches PercentileBeatDetector's classification
+        logic so the RNN-driven kind decisions sit in the same regime as
+        the existing detectors' kind decisions.
 
-        Net design: the RNN improves *when* a beat is detected; this
-        function gives a same-quality *which kind* answer as the
-        existing band-flux detectors. Future v2 retrain may replace
-        this with model-driven downbeat/beat output.
+        For each band, compute how unusually high the current flux is
+        compared to its recent history (median + spread). Pick the band
+        with the largest positive spike. This sidesteps the spectrum-
+        density bias of classifying by absolute magnitude (mid always
+        wins because mid has the most absolute content in most music).
         """
         best_band = self._band_names[0]
-        best_energy = -1.0
+        best_spike = -float('inf')
         for name in self._band_names:
-            mask = self._band_masks[name]
-            if not np.any(mask):
-                continue
-            energy = float(mag[mask].mean())
-            if energy > best_energy:
-                best_energy = energy
+            hist = self._band_flux_history[name]
+            current = band_flux[name]
+            if len(hist) < 5:
+                # Warm-up: fall back to absolute energy so we don't all
+                # default to the first band.
+                spike = current
+            else:
+                arr = np.fromiter(hist, dtype=np.float32)
+                ref = float(np.median(arr))
+                spread = float(np.std(arr)) + 1e-9
+                # Z-score-ish: how many "typical noise widths" above the
+                # median is the current flux?
+                spike = (current - ref) / spread
+            if spike > best_spike:
+                best_spike = spike
                 best_band = name
         return best_band
 
@@ -225,13 +246,24 @@ class BeatRNNDetector(BeatDetectorBase):
             self._h.fill(0.0)
             self._frames_since_reset = 0
 
+        # Per-band flux for kind classification. Use the daemon's frame
+        # flux (the same signal PercentileBeatDetector keys on), masked
+        # by CQT bin band.
+        band_flux_now = {}
+        flux = frame.flux
+        for name in self._band_names:
+            mask = self._band_masks[name]
+            band_flux_now[name] = (float(flux[mask].mean())
+                                    if mask.any() else 0.0)
+            # Update history with the just-now value (used by future
+            # frames' classification — past values relative to which
+            # the current spike is measured).
+            self._band_flux_history[name].append(band_flux_now[name])
+
         # Causal peak picker: push activation, check the buffer's center
         # frame (which has now seen lookahead frames on both sides).
         self._buffer.append(activation)
-        # Parallel: push the CQT magnitude so we can classify the band
-        # at the moment of emission (the center frame, when it becomes
-        # the decided peak).
-        self._mag_buffer.append(mag)
+        self._band_flux_buffer.append(band_flux_now)
         if len(self._buffer) < self._buffer.maxlen:
             return []  # buffer warming up; no decisions yet
 
@@ -248,5 +280,5 @@ class BeatRNNDetector(BeatDetectorBase):
         if self._frames_since_beat < self._min_distance:
             return []
         self._frames_since_beat = 0
-        kind = self._classify_band(self._mag_buffer[L])
+        kind = self._classify_band(self._band_flux_buffer[L])
         return [BeatEvent(kind=kind, energy=center)]
