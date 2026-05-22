@@ -191,38 +191,59 @@ class BeatRNNDetector(BeatDetectorBase):
             hist.clear()
         self._frames_since_beat = self._min_distance
 
-    def _classify_band(self, band_flux: dict[str, float]) -> str:
-        """Pick the kind by per-band *flux* relative to that band's
-        recent history — matches PercentileBeatDetector's classification
-        logic so the RNN-driven kind decisions sit in the same regime as
-        the existing detectors' kind decisions.
+    def _classify_band(self, band_flux: dict[str, float]
+                        ) -> tuple[str, float]:
+        """Pick (band_name, energy) by per-band *flux* relative to that
+        band's recent history — matches PercentileBeatDetector's
+        classification AND its energy convention so the RNN-driven
+        events sit in the same regime as the existing detectors' events.
 
         For each band, compute how unusually high the current flux is
-        compared to its recent history (median + spread). Pick the band
-        with the largest positive spike. This sidesteps the spectrum-
-        density bias of classifying by absolute magnitude (mid always
-        wins because mid has the most absolute content in most music).
+        compared to its recent history (z-score = (current - median) /
+        std). Pick the band with the largest positive spike. The
+        winning band's z-score, mapped to [0, 1], becomes the event
+        energy — strong spikes (3σ+) clamp at 1.0, matching how
+        PercentileBeatDetector reported energy as
+        (flux - threshold) / threshold clamped at 1.
+
+        Why z-score rather than sigmoid output: the model activation
+        answers "is this a beat" (binary, gated by threshold). The
+        z-score answers "how strong is this beat compared to recent
+        local context" — which is what downstream axes were tuned
+        against from PercentileBeatDetector. Using activation directly
+        capped energy at ~0.6-0.7 since the model rarely outputs near
+        1.0, causing visibly weaker downstream responses.
         """
         best_band = self._band_names[0]
-        best_spike = -float('inf')
+        best_score = -float('inf')
+        # Energy default for the warmup case where no band has enough
+        # history to compute a z-score. Beats early in a song fall back
+        # to a middling value so the system doesn't pin to 0 or 1.
+        energy = 0.5
         for name in self._band_names:
             hist = self._band_flux_history[name]
             current = band_flux[name]
             if len(hist) < 5:
-                # Warm-up: fall back to absolute energy so we don't all
+                # Warm-up: order bands by absolute flux so we don't
                 # default to the first band.
-                spike = current
+                score = current
+                this_energy: float | None = None
             else:
                 arr = np.fromiter(hist, dtype=np.float32)
                 ref = float(np.median(arr))
                 spread = float(np.std(arr)) + 1e-9
-                # Z-score-ish: how many "typical noise widths" above the
-                # median is the current flux?
-                spike = (current - ref) / spread
-            if spike > best_spike:
-                best_spike = spike
+                score = (current - ref) / spread
+                # 3σ caps at 1.0 — empirically that's the strong-beat
+                # regime; calibrate the divisor if downstream responses
+                # are still off (lower = more aggressive = stronger
+                # response per beat).
+                this_energy = float(min(1.0, max(0.0, score / 3.0)))
+            if score > best_score:
+                best_score = score
                 best_band = name
-        return best_band
+                if this_energy is not None:
+                    energy = this_energy
+        return best_band, energy
 
     def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
         """Process one spectrum frame; return any beat events that
@@ -330,7 +351,8 @@ class BeatRNNDetector(BeatDetectorBase):
             return []
         self._frames_since_beat = 0
         self._emissions_since_diag_log += 1
-        kind = self._classify_band(self._band_flux_buffer[L])
-        log.debug('[beat_rnn] emit kind=%s activation=%.3f frame=%d',
-                  kind, center, self._frame_idx - L)
-        return [BeatEvent(kind=kind, energy=center)]
+        kind, energy = self._classify_band(self._band_flux_buffer[L])
+        log.debug(
+            '[beat_rnn] emit kind=%s activation=%.3f energy=%.3f frame=%d',
+            kind, center, energy, self._frame_idx - L)
+        return [BeatEvent(kind=kind, energy=energy)]
