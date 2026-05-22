@@ -36,8 +36,10 @@ from pathlib import Path
 import numpy as np
 
 from .beat_detector import BeatDetectorBase
+from ._band_config import BandConfig, default_band_config
 from ._spectrum import SpectrumFrame
 from ._types import BeatEvent
+from ._constants import FREQS
 
 
 # Hyperparameters of the trained model (must match build_beat_crnn args
@@ -86,6 +88,8 @@ class BeatRNNDetector(BeatDetectorBase):
                  min_peak_distance_frames: int = 9,  # ~100 ms at 93.75 fps
                  lookahead_frames: int = 9,           # ~100 ms latency
                  auto_reset_frames: int = 256,
+                 band_config: BandConfig | None = None,
+                 freqs: np.ndarray | None = None,
                  ) -> None:
         # Load + validate weights
         weights_path = Path(weights_path)
@@ -103,6 +107,24 @@ class BeatRNNDetector(BeatDetectorBase):
         self._lookahead = int(lookahead_frames)
         self._auto_reset = int(auto_reset_frames)
 
+        # Band masks for kind classification. The RNN gives us *when* a
+        # beat happened; the per-band energy heuristic gives us *which*
+        # of the three visual-axis tiers it should drive (low → genome
+        # axis, mid → palette, high → zoom). Mirrors the band-mask
+        # convention used by PercentileBeatDetector.
+        if band_config is None:
+            band_config = default_band_config()
+        self._band_names = list(band_config.detection_band_names)
+        if freqs is None:
+            # Caller didn't pass bin frequencies — derive from CqtEngine
+            # since this detector only accepts 108-bin CQT magnitudes.
+            from ._cqt_engine import CqtEngine
+            freqs = CqtEngine().bin_centers
+        self._band_masks = {
+            b.name: (freqs >= b.freq_range[0]) & (freqs < b.freq_range[1])
+            for b in band_config.detection_bands
+        }
+
         # Per-frame state
         self._h: np.ndarray = np.zeros(_HIDDEN_SIZE, dtype=np.float32)
         self._prev_log_mag: np.ndarray | None = None
@@ -110,6 +132,10 @@ class BeatRNNDetector(BeatDetectorBase):
 
         # Peak-picker rolling buffer of activations
         self._buffer: deque[float] = deque(maxlen=2 * self._lookahead + 1)
+        # Parallel buffer of CQT magnitudes for band-classification at
+        # the moment of emission. Same length as activation buffer.
+        self._mag_buffer: deque[np.ndarray] = deque(
+            maxlen=2 * self._lookahead + 1)
         # Position offset for emitted beats — running frame counter
         self._frame_idx = 0
         # Frames since last emitted beat (refractory enforcement)
@@ -123,7 +149,31 @@ class BeatRNNDetector(BeatDetectorBase):
         self._prev_log_mag = None
         self._frames_since_reset = 0
         self._buffer.clear()
+        self._mag_buffer.clear()
         self._frames_since_beat = self._min_distance
+
+    def _classify_band(self, mag: np.ndarray) -> str:
+        """Heuristic kind classification at a beat frame: pick the band
+        with the highest energy. Matches the existing detectors' band
+        layout so downstream visualizations see the same `kind` values
+        regardless of which detector produced the beat.
+
+        Net design: the RNN improves *when* a beat is detected; this
+        function gives a same-quality *which kind* answer as the
+        existing band-flux detectors. Future v2 retrain may replace
+        this with model-driven downbeat/beat output.
+        """
+        best_band = self._band_names[0]
+        best_energy = -1.0
+        for name in self._band_names:
+            mask = self._band_masks[name]
+            if not np.any(mask):
+                continue
+            energy = float(mag[mask].mean())
+            if energy > best_energy:
+                best_energy = energy
+                best_band = name
+        return best_band
 
     def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
         """Process one spectrum frame; return any beat events that
@@ -178,6 +228,10 @@ class BeatRNNDetector(BeatDetectorBase):
         # Causal peak picker: push activation, check the buffer's center
         # frame (which has now seen lookahead frames on both sides).
         self._buffer.append(activation)
+        # Parallel: push the CQT magnitude so we can classify the band
+        # at the moment of emission (the center frame, when it becomes
+        # the decided peak).
+        self._mag_buffer.append(mag)
         if len(self._buffer) < self._buffer.maxlen:
             return []  # buffer warming up; no decisions yet
 
@@ -194,4 +248,5 @@ class BeatRNNDetector(BeatDetectorBase):
         if self._frames_since_beat < self._min_distance:
             return []
         self._frames_since_beat = 0
-        return [BeatEvent(kind='rnn', energy=center)]
+        kind = self._classify_band(self._mag_buffer[L])
+        return [BeatEvent(kind=kind, energy=center)]

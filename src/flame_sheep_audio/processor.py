@@ -164,6 +164,8 @@ class AudioProcessor:
                     cfg.detector, 'rnn_lookahead_frames', 9)),
                 auto_reset_frames=int(getattr(
                     cfg.detector, 'rnn_auto_reset_frames', 256)),
+                band_config=band_config,
+                freqs=freqs,
             )
         import logging
         logging.getLogger(__name__).warning(
