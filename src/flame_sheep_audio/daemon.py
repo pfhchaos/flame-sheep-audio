@@ -1,7 +1,7 @@
 """Audio engine daemon — runs AudioProcessor and publishes via shmem + dbus.
 
 Usage:
-    python -m flame_sheep_audio.daemon [--device NAME] [--engine cqt|octave_bank]
+    python -m flame_sheep_audio.daemon [--device NAME]
 
 Consumers connect via:
     1. dbus GetSchema() → JSON layout description
@@ -31,24 +31,13 @@ log = logging.getLogger(__name__)
 class AudioDaemon:
     """Audio analysis daemon with shmem + dbus output."""
 
-    def __init__(self, device: str | int | None = None,
-                 spectrum_engine: str = 'cqt'):
+    def __init__(self, device: str | int | None = None):
         from .processor import AudioProcessor
         from ._band_config import default_band_config
+        from ._cqt_engine import CqtEngine
 
-        # Build spectrum engine
-        engine = None
-        if spectrum_engine == 'cqt':
-            try:
-                from ._cqt_engine import CqtEngine
-                engine = CqtEngine()
-                log.info('spectrum engine: CQT')
-            except ImportError:
-                log.warning('CQT unavailable, falling back to octave bank')
-        if engine is None:
-            from ._octave_bank import OctaveBankEngine
-            engine = OctaveBankEngine()
-            log.info('spectrum engine: octave bank')
+        engine = CqtEngine()
+        log.info('spectrum engine: CQT')
 
         self._processor = AudioProcessor(device=device, spectrum_engine=engine)
         self._band_config = default_band_config()
@@ -133,9 +122,6 @@ def main():
     parser = argparse.ArgumentParser(description='Flame Sheep Audio Daemon')
     parser.add_argument('--device', type=str, default=None,
                         help='audio device name or index')
-    parser.add_argument('--engine', type=str, default='cqt',
-                        choices=['cqt', 'octave_bank'],
-                        help='spectrum engine (default: cqt)')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -144,7 +130,7 @@ def main():
         datefmt='%H:%M:%S',
     )
 
-    daemon = AudioDaemon(device=args.device, spectrum_engine=args.engine)
+    daemon = AudioDaemon(device=args.device)
 
     def _handle_signal(signum, frame):
         daemon.stop()

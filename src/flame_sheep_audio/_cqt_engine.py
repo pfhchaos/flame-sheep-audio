@@ -1,9 +1,9 @@
 """CQT spectrum engine — wraps rt-cqt's SlidingCqt for real-time use.
 
-Drop-in replacement for OctaveBankEngine. Same push_hop() interface,
-same 108-bin output (9 octaves * 12 bins/octave).
-
-Requires the prtcqt native module (rt-cqt Python bindings).
+The daemon's only spectrum engine. 108-bin output (9 octaves × 12
+bins/octave). Requires the prtcqt native module — hard dep, since
+the OctaveBank / FFT fallbacks were removed once CQT was committed
+to as the production choice.
 """
 
 from __future__ import annotations
@@ -22,10 +22,7 @@ except ImportError:
 
 
 class CqtEngine(SpectrumEngineBase):
-    """Real-time Constant Q Transform via rt-cqt's SlidingCqt.
-
-    Same push_hop() interface as OctaveBankEngine.
-    """
+    """Real-time Constant Q Transform via rt-cqt's SlidingCqt."""
 
     def __init__(self, n_octaves: int = 9, bins_per_octave: int = 12,
                  fmin: float = 32.7) -> None:

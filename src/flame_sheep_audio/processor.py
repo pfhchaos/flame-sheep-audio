@@ -55,15 +55,15 @@ class AudioProcessor:
 
         self._source = source or PipeWireSource(device=device)
         if spectrum_engine is not None:
+            # Injection still allowed for dev/test (e.g., a stub engine
+            # for deterministic tests). End users don't have a choice.
             self._spectrum_engine = spectrum_engine
         else:
-            try:
-                from ._cqt_engine import CqtEngine
-                self._spectrum_engine = CqtEngine()
-            except ImportError:
-                from ._octave_bank import OctaveBankEngine
-                self._spectrum_engine = OctaveBankEngine()
-        # Custom freqs for non-FFT engines (e.g., OctaveBankEngine)
+            from ._cqt_engine import CqtEngine
+            self._spectrum_engine = CqtEngine()
+        # CqtEngine exposes bin_centers; this used to also handle a
+        # fallback engine without bin_centers (OctaveBank/FFT). Now it
+        # just publishes the CQT bin frequencies for downstream consumers.
         freqs = getattr(self._spectrum_engine, 'bin_centers', None)
         self._bin_freqs = freqs if freqs is not None else FREQS
 
