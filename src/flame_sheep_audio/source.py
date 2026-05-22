@@ -36,14 +36,7 @@ class SignalSource(Protocol):
 
 
 class PipeWireSource:
-    """Real audio capture via sounddevice (PipeWire/PulseAudio/ALSA).
-
-    When `cfg.agc.enabled`, applies source-level AGC to every captured
-    block before it enters the buffer. All downstream consumers see
-    level-normalized PCM. See flame_sheep_audio._agc for the design
-    rationale (multi-minute EMA, persistence across restarts, noise-
-    floor zeroing).
-    """
+    """Real audio capture via sounddevice (PipeWire/PulseAudio/ALSA)."""
 
     def __init__(self, device: str | int | None = None) -> None:
         self._lock = threading.Lock()
@@ -51,20 +44,6 @@ class PipeWireSource:
         self._stop_event = threading.Event()
         self._buffer = deque(maxlen=SAMPLE_RATE // 2)  # ~0.5s buffer
         self._new_samples = 0
-
-        # Source-level AGC (opt-in via cfg). Constructed if enabled so
-        # the callback path stays simple; absent if not.
-        from .config import cfg
-        self._agc = None
-        if getattr(cfg.agc, 'enabled', False):
-            from ._agc import AudioLevelAgc
-            self._agc = AudioLevelAgc(
-                sample_rate=SAMPLE_RATE,
-                target_rms=float(cfg.agc.target_rms),
-                noise_floor=float(cfg.agc.noise_floor),
-                time_constant_sec=float(cfg.agc.time_constant_sec),
-                save_interval_sec=float(cfg.agc.save_interval_sec),
-            )
 
         self._stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -76,11 +55,8 @@ class PipeWireSource:
         )
 
     def _callback(self, indata: np.ndarray, frames: int, time: object, status: object) -> None:
-        block = indata[:, 0]
-        if self._agc is not None:
-            block = self._agc.process(block)
         with self._cond:
-            self._buffer.extend(block)
+            self._buffer.extend(indata[:, 0])
             self._new_samples += frames
             self._cond.notify_all()
 
