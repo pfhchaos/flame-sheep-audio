@@ -47,10 +47,26 @@ from ._constants import FREQS
 
 # Hyperparameters of the trained model (must match build_beat_crnn args
 # used during training; see tools/train_beat_rnn_continuous.py).
+#
+# v2 architecture (multi-head):
+#   - hidden_size 48 → 96: gives the GRU's shared representation room for
+#     per-head feature subspaces (downbeat / beat / onset).
+#   - proj_size 32 → 64: widens the input bottleneck so each head sees
+#     more raw spectrum signal.
+#   - n_classes 1 → 3: independent sigmoid heads with per-channel BCE
+#     loss. Hierarchical labels — col 0 fires on downbeats, col 1 on
+#     ALL beats (incl downbeats), col 2 on ALL onsets (incl beats). The
+#     runtime classifier picks the most specific class that fired,
+#     replacing the previous spectral-flux-based kind heuristic.
 _INPUT_SIZE = 216
-_PROJ_SIZE = 32
-_HIDDEN_SIZE = 48
-_N_CLASSES = 1
+_PROJ_SIZE = 64
+_HIDDEN_SIZE = 96
+_N_CLASSES = 3
+
+# Output-channel semantics — match generate_beat_labels.py's labels_hier.
+_COL_DOWNBEAT = 0
+_COL_BEAT = 1
+_COL_ONSET = 2
 
 # CQT magnitude scale correction — band-aid for prtcqt/librosa.cqt
 # normalization mismatch. The beat-RNN was trained on librosa.cqt
@@ -105,6 +121,9 @@ class BeatRNNDetector(BeatDetectorBase):
     def __init__(self,
                  weights_path: str | Path,
                  threshold: float = 0.3,
+                 downbeat_threshold: float | None = None,
+                 beat_threshold: float | None = None,
+                 onset_threshold: float | None = None,
                  min_peak_distance_frames: int = 9,  # ~100 ms at 93.75 fps
                  lookahead_frames: int = 9,           # ~100 ms latency
                  auto_reset_frames: int = 256,
@@ -123,6 +142,14 @@ class BeatRNNDetector(BeatDetectorBase):
          self._W_out, self._b_out) = _unpack_weights(flat)
 
         self._threshold = float(threshold)
+        # Per-head thresholds default to the shared `threshold` for
+        # back-compat. Override individually if one head is over/under
+        # firing relative to ground truth — e.g. the downbeat head may
+        # need a higher bar since its positive class is much rarer than
+        # general beats.
+        self._th_downbeat = float(downbeat_threshold if downbeat_threshold is not None else threshold)
+        self._th_beat = float(beat_threshold if beat_threshold is not None else threshold)
+        self._th_onset = float(onset_threshold if onset_threshold is not None else threshold)
         self._min_distance = int(min_peak_distance_frames)
         self._lookahead = int(lookahead_frames)
         self._auto_reset = int(auto_reset_frames)
@@ -158,10 +185,19 @@ class BeatRNNDetector(BeatDetectorBase):
         self._frames_since_diag_log = 0
         self._emissions_since_diag_log = 0
 
-        # Peak-picker rolling buffer of activations
+        # Peak-picker rolling buffer of activations (col 1, any-beat)
         self._buffer: deque[float] = deque(maxlen=2 * self._lookahead + 1)
-        # Parallel buffer of per-band flux for kind classification at the
-        # moment of emission. Same length as activation buffer.
+        # Parallel buffers for the other two heads (downbeat / onset) so
+        # the center-frame classifier can read them at emit time with the
+        # same lookahead alignment as the peak-picked activation.
+        self._downbeat_buffer: deque[float] = deque(
+            maxlen=2 * self._lookahead + 1)
+        self._onset_buffer: deque[float] = deque(
+            maxlen=2 * self._lookahead + 1)
+        # Parallel buffer of per-band flux — kept for energy magnitude
+        # at emit time (model activation gives kind; band flux z-score
+        # gives "how strong was this hit relative to recent context",
+        # which is what downstream axes were tuned against).
         self._band_flux_buffer: deque[dict] = deque(
             maxlen=2 * self._lookahead + 1)
         # Per-band rolling flux history for relative-spike classification
@@ -283,8 +319,17 @@ class BeatRNNDetector(BeatDetectorBase):
         h_hat = np.tanh(wx_h + self._bias_gru[2] + r * (uh_n + self._bias_gru[5]))
         self._h = (1.0 - z) * h_hat + z * self._h
 
-        # Linear out + sigmoid → activation in [0, 1]
-        activation = float(_sigmoid(self._h @ self._W_out[:, 0] + self._b_out[0]))
+        # Linear out + sigmoid for ALL three heads. Each head is an
+        # independent classifier (no softmax) — col 0 = downbeat, col 1
+        # = any-beat, col 2 = any-onset. The peak-picker keys on col 1
+        # (any-beat) since that's the broadest "something happened on a
+        # beat" signal; col 0 and col 2 are used at classification time
+        # to decide the most-specific kind that fired.
+        all_logits = self._h @ self._W_out + self._b_out  # (3,)
+        all_acts = _sigmoid(all_logits)  # (3,)
+        activation = float(all_acts[_COL_BEAT])
+        downbeat_act = float(all_acts[_COL_DOWNBEAT])
+        onset_act = float(all_acts[_COL_ONSET])
 
         # Update counters
         self._frame_idx += 1
@@ -330,9 +375,12 @@ class BeatRNNDetector(BeatDetectorBase):
             # the current spike is measured).
             self._band_flux_history[name].append(band_flux_now[name])
 
-        # Causal peak picker: push activation, check the buffer's center
-        # frame (which has now seen lookahead frames on both sides).
+        # Causal peak picker: push all three head activations + band flux,
+        # check the buffer's center frame (which has now seen lookahead
+        # frames on both sides).
         self._buffer.append(activation)
+        self._downbeat_buffer.append(downbeat_act)
+        self._onset_buffer.append(onset_act)
         self._band_flux_buffer.append(band_flux_now)
         if len(self._buffer) < self._buffer.maxlen:
             return []  # buffer warming up; no decisions yet
@@ -341,9 +389,33 @@ class BeatRNNDetector(BeatDetectorBase):
         # (with maxlen = 2*lookahead+1).
         L = self._lookahead
         center = self._buffer[L]
-        if center < self._threshold:
+        center_downbeat = self._downbeat_buffer[L]
+        center_onset = self._onset_buffer[L]
+
+        # Pick the kind from the threshold hierarchy. Most specific wins:
+        # downbeat > beat > onset > nothing. We peak-pick on whichever
+        # head fires so onset-only events (palette triggers) aren't lost
+        # just because the beat head was quiet.
+        if center_downbeat >= self._th_downbeat:
+            kind_role = 'downbeat'
+            kind_band = 'low'
+            peak_signal = center_downbeat
+            head_buffer = self._downbeat_buffer
+        elif center >= self._th_beat:
+            kind_role = 'beat'
+            kind_band = 'mid'
+            peak_signal = center
+            head_buffer = self._buffer
+        elif center_onset >= self._th_onset:
+            kind_role = 'onset'
+            kind_band = 'high'
+            peak_signal = center_onset
+            head_buffer = self._onset_buffer
+        else:
             return []
-        is_peak = all(center >= self._buffer[i] for i in range(2 * L + 1)
+
+        # Peak-pick on the head that triggered (not always the beat head).
+        is_peak = all(peak_signal >= head_buffer[i] for i in range(2 * L + 1)
                       if i != L)
         if not is_peak:
             return []
@@ -351,8 +423,22 @@ class BeatRNNDetector(BeatDetectorBase):
             return []
         self._frames_since_beat = 0
         self._emissions_since_diag_log += 1
-        kind, energy = self._classify_band(self._band_flux_buffer[L])
+
+        # Energy still comes from band-flux z-score (downstream axes were
+        # tuned against PercentileBeatDetector's energy convention, not
+        # against sigmoid activation magnitude). Use the band that
+        # corresponds to the model's kind decision.
+        _, energy = self._classify_band(self._band_flux_buffer[L])
         log.debug(
-            '[beat_rnn] emit kind=%s activation=%.3f energy=%.3f frame=%d',
-            kind, center, energy, self._frame_idx - L)
-        return [BeatEvent(kind=kind, energy=energy)]
+            '[beat_rnn] emit kind=%s (band=%s) acts=(d=%.3f b=%.3f o=%.3f) '
+            'energy=%.3f frame=%d',
+            kind_role, kind_band, center_downbeat, center, center_onset,
+            energy, self._frame_idx - L)
+        # Emit with the band name (low/mid/high) so role_mapper's existing
+        # band→role mapping handles the rest. role_mapper currently maps
+        # low→downbeat, mid→backbeat, high→subdivision — which lines up
+        # with our model semantics if you read "backbeat" loosely as
+        # "any beat that isn't a downbeat" (downstream axes don't care
+        # about the metrical-position distinction; they care which
+        # visual axis to drive).
+        return [BeatEvent(kind=kind_band, energy=energy)]
