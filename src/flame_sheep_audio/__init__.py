@@ -19,7 +19,7 @@ from ._cqt_engine import CqtEngine
 
 # Band configuration
 from ._band_config import BandConfig, EnergyBandDef, DetectionBandDef, default_band_config
-from ._bands import make_mask, make_weights, A_WEIGHTS
+from ._bands import make_mask, make_weights, A_WEIGHTS, a_weight_curve
 
 # Beat detection
 from .beat_detector import FluxBeatDetector
