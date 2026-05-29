@@ -78,6 +78,12 @@ _LEGACY_ARCH_BY_FLAT_LEN: dict[int, tuple[int, int, int]] = {
     30451: (64, 48, 3),  # v3 hierarchical 3-head (beat_rnn_3head.npz)
 }
 
+# Architecture markers stored in the .npz `architecture` field.
+# Single = legacy + v3 (1 GRU + N-head linear); multidepth = stacked
+# GRU, one head per layer (build_beat_crnn_multidepth in wallpaper_ml).
+_ARCH_SINGLE = 'single'
+_ARCH_MULTIDEPTH = 'multidepth'
+
 # Output-channel semantics — match generate_beat_labels.py's labels_hier.
 _COL_DOWNBEAT = 0
 _COL_BEAT = 1
@@ -345,6 +351,43 @@ class BeatRNNDetector(BeatDetectorBase):
                     energy = this_energy
         return best_band, energy
 
+    def _forward_step(self, x: np.ndarray) -> tuple[float, float, float]:
+        """Single-frame forward → (downbeat_act, beat_act, onset_act).
+
+        Single-arch implementation: input_linear → one GRU → one
+        multi-head linear; columns laid out as [downbeat, beat, onset]
+        per _COL_DOWNBEAT/_COL_BEAT/_COL_ONSET.
+
+        Subclasses (e.g. MultiDepthBeatRNNDetector) override this with
+        their own forward graph. The contract — returning the three
+        head sigmoids in (downbeat, beat, onset) order — is what
+        detect()'s peak-picker logic depends on.
+        """
+        # Linear → ReLU
+        proj = x @ self._W_in + self._b_in
+        np.maximum(proj, 0.0, out=proj)
+
+        # GRU step (PyTorch convention: split input/hidden biases)
+        wx_z = proj @ self._W_gru[0]
+        wx_r = proj @ self._W_gru[1]
+        wx_h = proj @ self._W_gru[2]
+        uh_z = self._h @ self._U_gru[0]
+        uh_r = self._h @ self._U_gru[1]
+        uh_n = self._h @ self._U_gru[2]
+        z = _sigmoid(wx_z + uh_z + self._bias_gru[0] + self._bias_gru[3])
+        r = _sigmoid(wx_r + uh_r + self._bias_gru[1] + self._bias_gru[4])
+        h_hat = np.tanh(wx_h + self._bias_gru[2] + r * (uh_n + self._bias_gru[5]))
+        self._h = (1.0 - z) * h_hat + z * self._h
+
+        # Linear out + sigmoid for ALL three heads. Each head is an
+        # independent classifier (no softmax) — col 0 = downbeat, col 1
+        # = any-beat, col 2 = any-onset.
+        all_logits = self._h @ self._W_out + self._b_out  # (3,)
+        all_acts = _sigmoid(all_logits)  # (3,)
+        return (float(all_acts[_COL_DOWNBEAT]),
+                float(all_acts[_COL_BEAT]),
+                float(all_acts[_COL_ONSET]))
+
     def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
         """Process one spectrum frame; return any beat events that
         became confirmable now (with the buffered lookahead)."""
@@ -367,33 +410,7 @@ class BeatRNNDetector(BeatDetectorBase):
 
         x = np.concatenate([log_mag, diff])  # (216,)
 
-        # Linear → ReLU
-        proj = x @ self._W_in + self._b_in
-        np.maximum(proj, 0.0, out=proj)
-
-        # GRU step (PyTorch convention: split input/hidden biases)
-        wx_z = proj @ self._W_gru[0]
-        wx_r = proj @ self._W_gru[1]
-        wx_h = proj @ self._W_gru[2]
-        uh_z = self._h @ self._U_gru[0]
-        uh_r = self._h @ self._U_gru[1]
-        uh_n = self._h @ self._U_gru[2]
-        z = _sigmoid(wx_z + uh_z + self._bias_gru[0] + self._bias_gru[3])
-        r = _sigmoid(wx_r + uh_r + self._bias_gru[1] + self._bias_gru[4])
-        h_hat = np.tanh(wx_h + self._bias_gru[2] + r * (uh_n + self._bias_gru[5]))
-        self._h = (1.0 - z) * h_hat + z * self._h
-
-        # Linear out + sigmoid for ALL three heads. Each head is an
-        # independent classifier (no softmax) — col 0 = downbeat, col 1
-        # = any-beat, col 2 = any-onset. The peak-picker keys on col 1
-        # (any-beat) since that's the broadest "something happened on a
-        # beat" signal; col 0 and col 2 are used at classification time
-        # to decide the most-specific kind that fired.
-        all_logits = self._h @ self._W_out + self._b_out  # (3,)
-        all_acts = _sigmoid(all_logits)  # (3,)
-        activation = float(all_acts[_COL_BEAT])
-        downbeat_act = float(all_acts[_COL_DOWNBEAT])
-        onset_act = float(all_acts[_COL_ONSET])
+        downbeat_act, activation, onset_act = self._forward_step(x)
 
         # Update counters
         self._frame_idx += 1
@@ -506,3 +523,272 @@ class BeatRNNDetector(BeatDetectorBase):
         # about the metrical-position distinction; they care which
         # visual axis to drive).
         return [BeatEvent(kind=kind_band, energy=energy)]
+
+
+# ---------------------------------------------------------------------------
+# Multi-depth variant — stacked GRUs, one head per layer
+# ---------------------------------------------------------------------------
+
+# Multi-depth → (downbeat, beat, onset) head-index mapping. Must mirror
+# train_beat_rnn_continuous.MULTIDEPTH_HEAD_TO_LABEL_COL inverted:
+#   head 0 (shallow) = onset    (col 2 in labels_hier)
+#   head 1 (mid)     = beat     (col 1)
+#   head 2 (deep)    = downbeat (col 0)
+# Stored here so a future retrain that changes the mapping has one
+# obvious place to update.
+_MULTIDEPTH_HEAD_FOR_DOWNBEAT = 2
+_MULTIDEPTH_HEAD_FOR_BEAT = 1
+_MULTIDEPTH_HEAD_FOR_ONSET = 0
+
+
+def _multidepth_param_count(I: int, P: int, H: int, L: int,
+                            n_heads: int | None = None) -> int:
+    """Total parameters in a multi-depth checkpoint of the given shape.
+
+    Used by the file-length-based legacy detector when an architecture
+    field is missing but the dim fields are present (we can still
+    confirm the layout matches before committing to multidepth unpack).
+    """
+    if n_heads is None:
+        n_heads = L
+    # Input linear (I → P) + bias
+    n = I * P + P
+    # Stacked GRUs — layer 0 takes P, rest take H. Per layer:
+    #   W (3 * in * H) + U (3 * H * H) + bias (6 * H)
+    for k in range(L):
+        in_k = P if k == 0 else H
+        n += 3 * in_k * H + 3 * H * H + 6 * H
+    # Heads: each (H → 1) + bias
+    n += n_heads * (H + 1)
+    return n
+
+
+def _discover_arch_multidepth(data, flat_len: int
+                              ) -> tuple[int, int, int, int, int]:
+    """Return (input_size, proj_size, hidden_size, n_gru_layers, n_heads)
+    for a multi-depth checkpoint.
+
+    Requires explicit dim fields in the .npz — there's no legacy table
+    for multi-depth since the architecture is new (2026-05-29). If you
+    add a stacked-GRU checkpoint without the metadata, retrain or
+    manually re-save with the dims.
+    """
+    required = ('input_size', 'proj_size', 'hidden_size', 'n_gru_layers')
+    missing = [f for f in required if f not in data.files]
+    if missing:
+        raise ValueError(
+            f'Multi-depth checkpoint missing required dim field(s): '
+            f'{missing}. Multi-depth has no legacy-lookup fallback — '
+            f'either retrain (writes dims automatically) or re-save '
+            f'with the fields populated.')
+    I = int(data['input_size'])
+    P = int(data['proj_size'])
+    H = int(data['hidden_size'])
+    L = int(data['n_gru_layers'])
+    # n_heads defaults to L (one head per layer, the canonical design).
+    # Stored explicitly only if a future variant deviates.
+    n_heads = int(data['n_heads']) if 'n_heads' in data.files else L
+    expected = _multidepth_param_count(I, P, H, L, n_heads)
+    if expected != flat_len:
+        raise ValueError(
+            f'Multi-depth weight length mismatch: file has {flat_len} '
+            f'floats but layout (input={I}, proj={P}, hidden={H}, '
+            f'layers={L}, heads={n_heads}) expects {expected}. '
+            f'File metadata and weights are inconsistent.')
+    return I, P, H, L, n_heads
+
+
+class MultiDepthBeatRNNDetector(BeatRNNDetector):
+    """Streaming beat detector backed by the multi-depth stacked-GRU
+    model from build_beat_crnn_multidepth.
+
+    Same BeatDetectorBase API as BeatRNNDetector — only the forward
+    computation differs (stacked GRUs, one head per depth, head-index
+    → (downbeat/beat/onset) routing per the training convention).
+
+    Loads exclusively from .npz files with architecture='multidepth'
+    and the n_gru_layers field set. The base BeatRNNDetector handles
+    single-arch loads; the factory load_beat_rnn() picks between the
+    two.
+    """
+
+    def __init__(self,
+                 weights_path: str | Path,
+                 threshold: float = 0.3,
+                 downbeat_threshold: float | None = None,
+                 beat_threshold: float | None = None,
+                 onset_threshold: float | None = None,
+                 min_peak_distance_frames: int = 9,
+                 lookahead_frames: int = 9,
+                 auto_reset_frames: int = 256,
+                 band_config: BandConfig | None = None,
+                 freqs: np.ndarray | None = None,
+                 ) -> None:
+        # Lazy import: keeps the base detector module free of an
+        # eval-tree dependency; only multidepth requires the shared
+        # numpy forward primitives.
+        from flame_sheep.eval.rnn_forward import unpack_weights_multidepth
+
+        weights_path = Path(weights_path)
+        data = np.load(weights_path)
+        if not hasattr(data, 'files') or 'weights' not in data.files:
+            raise ValueError(
+                f'{weights_path}: expected .npz with a "weights" array')
+        flat = np.asarray(data['weights'], dtype=np.float32)
+        I, P, H, L, n_heads = _discover_arch_multidepth(data, len(flat))
+        # Store dims first so BeatRNNDetector's downstream init code
+        # (peak picker buffers, band-flux history, etc.) sees a
+        # consistent hidden_size.
+        self._input_size = I
+        self._proj_size = P
+        self._hidden_size = H
+        self._n_gru_layers = L
+        self._n_heads = n_heads
+        # n_classes preserved for diagnostic prints + tests that read it.
+        self._n_classes = n_heads
+
+        # Multi-depth weight unpack — list of GRU tuples, list of head tuples.
+        (self._W_in, self._b_in,
+         self._grus, self._heads) = unpack_weights_multidepth(flat, I, P, H, L,
+                                                               n_heads=n_heads)
+
+        # Per-layer hidden states — one per stack layer. Replaces the
+        # base class's single self._h. Initialized below; reset_bands
+        # zeroes them like the single-arch path.
+        self._hiddens: list[np.ndarray] = [
+            np.zeros(H, dtype=np.float32) for _ in range(L)]
+
+        # Bypass the base class's __init__ weight-loading path and run
+        # the rest of its setup (band masks, peak picker buffers, diag
+        # counters). Factoring this out would have meant a larger
+        # refactor of BeatRNNDetector; instead we replicate the
+        # init body inline. Anything BeatRNNDetector.__init__ does
+        # after weight-loading needs to also happen here.
+        self._threshold = float(threshold)
+        self._th_downbeat = float(downbeat_threshold if downbeat_threshold is not None else threshold)
+        self._th_beat = float(beat_threshold if beat_threshold is not None else threshold)
+        self._th_onset = float(onset_threshold if onset_threshold is not None else threshold)
+        self._min_distance = int(min_peak_distance_frames)
+        self._lookahead = int(lookahead_frames)
+        self._auto_reset = int(auto_reset_frames)
+
+        if band_config is None:
+            band_config = default_band_config()
+        self._band_names = list(band_config.detection_band_names)
+        if freqs is None:
+            from ._cqt_engine import CqtEngine
+            freqs = CqtEngine().bin_centers
+        self._band_masks = {
+            b.name: (freqs >= b.freq_range[0]) & (freqs < b.freq_range[1])
+            for b in band_config.detection_bands
+        }
+
+        # Per-frame state (mirrors BeatRNNDetector's init body)
+        self._prev_log_mag: np.ndarray | None = None
+        self._frames_since_reset = 0
+        self._diag_recent_activations: deque[float] = deque(maxlen=200)
+        self._diag_log_interval = 200
+        self._frames_since_diag_log = 0
+        self._emissions_since_diag_log = 0
+        self._buffer: deque[float] = deque(maxlen=2 * self._lookahead + 1)
+        self._downbeat_buffer: deque[float] = deque(
+            maxlen=2 * self._lookahead + 1)
+        self._onset_buffer: deque[float] = deque(
+            maxlen=2 * self._lookahead + 1)
+        self._band_flux_buffer: deque[dict] = deque(
+            maxlen=2 * self._lookahead + 1)
+        self._band_flux_history: dict[str, deque[float]] = {
+            name: deque(maxlen=43)
+            for name in self._band_names
+        }
+        self._frame_idx = 0
+        self._frames_since_beat = self._min_distance
+
+    def reset_bands(self) -> None:
+        """Reset all state. Zeroes every layer's hidden state."""
+        for h in self._hiddens:
+            h.fill(0.0)
+        self._prev_log_mag = None
+        self._frames_since_reset = 0
+        self._buffer.clear()
+        self._band_flux_buffer.clear()
+        for hist in self._band_flux_history.values():
+            hist.clear()
+        self._frames_since_beat = self._min_distance
+
+    def _forward_step(self, x: np.ndarray) -> tuple[float, float, float]:
+        """Multi-depth forward: input projection → 3 stacked GRUs → 3 heads.
+
+        Head-index → (downbeat/beat/onset) per the training convention
+        (_MULTIDEPTH_HEAD_FOR_* constants). Returns the same triple as
+        BeatRNNDetector._forward_step so detect() doesn't need to
+        branch on architecture.
+        """
+        # Lazy import keeps the module load cheap when nobody uses
+        # multidepth; the function itself is hot (called per frame).
+        from flame_sheep.eval.rnn_forward import step_multidepth
+
+        weights = (self._W_in, self._b_in, self._grus, self._heads)
+        head_logits, self._hiddens = step_multidepth(x, self._hiddens, weights)
+        head_acts = _sigmoid(head_logits)
+        return (float(head_acts[_MULTIDEPTH_HEAD_FOR_DOWNBEAT]),
+                float(head_acts[_MULTIDEPTH_HEAD_FOR_BEAT]),
+                float(head_acts[_MULTIDEPTH_HEAD_FOR_ONSET]))
+
+    # The auto-reset hook in BeatRNNDetector.detect() does self._h.fill(0.0).
+    # Override the underlying field with a property that fills every layer's
+    # hidden when assigned/cleared — keeps detect()'s body architecture-free.
+    @property
+    def _h(self) -> np.ndarray:
+        """Compatibility shim: detect()'s `self._h.fill(0.0)` path needs
+        a target. Returning the deepest hidden is arbitrary but stable
+        (.fill is the only operation the base class invokes on it
+        outside _forward_step, which we override anyway)."""
+        return self._hiddens[-1]
+
+    @_h.setter
+    def _h(self, value: np.ndarray) -> None:
+        # detect() never reassigns self._h directly (only the base
+        # class _forward_step does), so this setter is a safety net.
+        # Treat any direct assignment as "reset all hiddens".
+        for h in self._hiddens:
+            h[:] = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Factory — picks the right detector class based on the checkpoint
+# ---------------------------------------------------------------------------
+
+def load_beat_rnn(weights_path: str | Path, **kwargs) -> BeatRNNDetector:
+    """Construct the right BeatRNN detector for the given checkpoint.
+
+    Reads the .npz's `architecture` field if present; defaults to
+    'single' for legacy files (the v1 + v3 layout). The 'multidepth'
+    branch dispatches to MultiDepthBeatRNNDetector.
+
+    All kwargs forward to the chosen detector's __init__. Same
+    signature as BeatRNNDetector(weights_path, **kwargs) for the
+    common case — callers in processor.py can swap the constructor
+    call for this factory without other changes.
+    """
+    weights_path = Path(weights_path)
+    data = np.load(weights_path)
+    arch = _ARCH_SINGLE
+    if hasattr(data, 'files') and 'architecture' in data.files:
+        # np.savez stores Python strings as 0-d unicode arrays; str()
+        # round-trips them. Legacy files without the field stay 'single'.
+        arch = str(data['architecture'])
+    # Close the .npz handle — the detector class loads it again itself.
+    # np.load's NpzFile keeps the file descriptor open; explicit close
+    # avoids "too many open files" if a long-running daemon repeatedly
+    # reloads weights (e.g. hot-reload path).
+    if hasattr(data, 'close'):
+        data.close()
+
+    if arch == _ARCH_MULTIDEPTH:
+        return MultiDepthBeatRNNDetector(weights_path, **kwargs)
+    if arch == _ARCH_SINGLE:
+        return BeatRNNDetector(weights_path, **kwargs)
+    raise ValueError(
+        f'{weights_path}: unknown architecture {arch!r}. Supported: '
+        f'{_ARCH_SINGLE!r}, {_ARCH_MULTIDEPTH!r}.')

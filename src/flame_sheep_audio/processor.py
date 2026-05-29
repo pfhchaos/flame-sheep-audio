@@ -161,7 +161,7 @@ class AudioProcessor:
         if kind == 'flux':
             return FluxBeatDetector(band_config=band_config, freqs=freqs)
         if kind == 'rnn':
-            from .beat_rnn import BeatRNNDetector
+            from .beat_rnn import load_beat_rnn
             weights_path = getattr(cfg.detector, 'rnn_weights_path', '')
             if not weights_path:
                 raise ValueError(
@@ -170,7 +170,9 @@ class AudioProcessor:
             def _opt_float(key):
                 v = getattr(cfg.detector, key, None)
                 return float(v) if v is not None else None
-            return BeatRNNDetector(
+            # Factory dispatches to MultiDepthBeatRNNDetector for
+            # architecture='multidepth' checkpoints; same args.
+            return load_beat_rnn(
                 weights_path,
                 threshold=float(getattr(cfg.detector, 'rnn_threshold', 0.3)),
                 downbeat_threshold=_opt_float('rnn_downbeat_threshold'),

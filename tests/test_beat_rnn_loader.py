@@ -29,9 +29,13 @@ import pytest
 # so direct import should work.
 from flame_sheep_audio.beat_rnn import (
     BeatRNNDetector,
+    MultiDepthBeatRNNDetector,
     _LEGACY_ARCH_BY_FLAT_LEN,
     _discover_arch,
+    _discover_arch_multidepth,
+    _multidepth_param_count,
     _unpack_weights,
+    load_beat_rnn,
 )
 
 
@@ -231,3 +235,224 @@ class TestUnpackValidation:
         # Pass dims for a different model (v1 shape)
         with pytest.raises(ValueError, match='Weight length mismatch'):
             _unpack_weights(flat, 216, 32, 48, 1)
+
+
+# ============================================================================
+# Multi-depth loader — separate code path from single-arch (stacked GRUs,
+# one head per layer; explicit dim fields required, no legacy fallback).
+# ============================================================================
+
+def _make_synthetic_multidepth_weights(I: int, P: int, H: int, L: int,
+                                       n_heads: int | None = None
+                                       ) -> np.ndarray:
+    """Generate a flat weight vector sized for the multi-depth layout."""
+    n = _multidepth_param_count(I, P, H, L, n_heads)
+    return np.random.default_rng(0).standard_normal(n).astype(np.float32)
+
+
+def _save_multidepth_npz(path: Path, I: int, P: int, H: int, L: int,
+                         flat: np.ndarray | None = None,
+                         architecture: str | None = 'multidepth',
+                         n_heads: int | None = None) -> None:
+    """Write a synthetic multi-depth .npz with full dim metadata. The
+    `architecture` field gets stored as a 0-d unicode array (same way
+    save_checkpoint does it)."""
+    if flat is None:
+        flat = _make_synthetic_multidepth_weights(I, P, H, L, n_heads)
+    extras = dict(input_size=I, proj_size=P, hidden_size=H, n_gru_layers=L)
+    if architecture is not None:
+        extras['architecture'] = np.array(architecture)
+    if n_heads is not None:
+        extras['n_heads'] = n_heads
+    np.savez(path, weights=flat, next_epoch=0, best_val_loss=0.0, **extras)
+
+
+class TestMultiDepthArchDiscovery:
+    """_discover_arch_multidepth requires explicit dim fields (no legacy
+    fallback) and validates the file length against expected layout."""
+
+    def test_explicit_dims_resolve(self, tmp_path):
+        """The canonical case: all four dim fields present, length matches."""
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3)
+        data = np.load(weights_path)
+        I, P, H, L, n_heads = _discover_arch_multidepth(
+            data, len(data['weights']))
+        assert (I, P, H, L, n_heads) == (216, 64, 48, 3, 3)
+
+    def test_missing_dim_field_raises(self, tmp_path):
+        """If any required dim field is missing, refuse to load —
+        there's no legacy table for multi-depth so silent fallback
+        isn't an option."""
+        weights_path = tmp_path / 'md_incomplete.npz'
+        # Save without n_gru_layers
+        flat = _make_synthetic_multidepth_weights(216, 64, 48, 3)
+        np.savez(weights_path, weights=flat, next_epoch=0, best_val_loss=0.0,
+                 input_size=216, proj_size=64, hidden_size=48,
+                 architecture=np.array('multidepth'))
+        data = np.load(weights_path)
+        with pytest.raises(ValueError, match='missing required dim'):
+            _discover_arch_multidepth(data, len(data['weights']))
+
+    def test_length_mismatch_raises(self, tmp_path):
+        """If the dim metadata says one shape but the flat weights are
+        sized for another, loud failure — silently using wrong dims
+        produces garbage."""
+        weights_path = tmp_path / 'md_bad_len.npz'
+        wrong_len_flat = np.zeros(12345, dtype=np.float32)
+        np.savez(weights_path, weights=wrong_len_flat, next_epoch=0,
+                 best_val_loss=0.0,
+                 input_size=216, proj_size=64, hidden_size=48, n_gru_layers=3,
+                 architecture=np.array('multidepth'))
+        data = np.load(weights_path)
+        with pytest.raises(ValueError, match='length mismatch'):
+            _discover_arch_multidepth(data, len(data['weights']))
+
+
+class TestMultiDepthDetectorConstruction:
+
+    def test_constructs_from_synthetic_file(self, tmp_path):
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3)
+        det = MultiDepthBeatRNNDetector(weights_path)
+        assert det._n_gru_layers == 3
+        assert det._hidden_size == 48
+        assert det._proj_size == 64
+        assert len(det._hiddens) == 3
+        assert all(h.shape == (48,) for h in det._hiddens)
+        # Per-layer GRU weight shapes: layer 0 takes proj_size, rest H
+        assert det._grus[0][0].shape == (3, 64, 48)
+        assert det._grus[1][0].shape == (3, 48, 48)
+        assert det._grus[2][0].shape == (3, 48, 48)
+        # Each head: (H → 1)
+        for W_h, b_h in det._heads:
+            assert W_h.shape == (48, 1)
+            assert b_h.shape == (1,)
+
+    def test_per_head_thresholds_stored(self, tmp_path):
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3)
+        det = MultiDepthBeatRNNDetector(
+            weights_path, threshold=0.3,
+            downbeat_threshold=0.15, beat_threshold=0.30,
+            onset_threshold=0.30)
+        assert det._th_downbeat == 0.15
+        assert det._th_beat == 0.30
+        assert det._th_onset == 0.30
+
+    def test_reset_bands_clears_all_hiddens(self, tmp_path):
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3)
+        det = MultiDepthBeatRNNDetector(weights_path)
+        # Dirty all hidden states
+        for h in det._hiddens:
+            h[:] = 1.0
+        det.reset_bands()
+        for h in det._hiddens:
+            assert (h == 0).all()
+
+
+class TestLoadBeatRNNFactory:
+    """The factory reads the architecture field and dispatches to the
+    right detector class. Default (no architecture field) = single-arch
+    for back-compat with pre-2026-05-29 checkpoints."""
+
+    def test_dispatches_to_multidepth(self, tmp_path):
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3,
+                              architecture='multidepth')
+        det = load_beat_rnn(weights_path)
+        assert isinstance(det, MultiDepthBeatRNNDetector)
+
+    def test_explicit_single_arch_dispatches_to_base(self, tmp_path):
+        """A file with architecture='single' explicitly marked routes
+        to BeatRNNDetector (the base, not the multidepth subclass).
+        Synthesized as v3 shape so the base loader has dims to discover."""
+        weights_path = tmp_path / 'single.npz'
+        flat = _make_synthetic_weights(216, 64, 48, 3)
+        np.savez(weights_path, weights=flat, next_epoch=0, best_val_loss=0.0,
+                 input_size=216, proj_size=64, hidden_size=48, n_classes=3,
+                 architecture=np.array('single'))
+        det = load_beat_rnn(weights_path)
+        # NOT MultiDepthBeatRNNDetector — the factory must distinguish them
+        assert type(det) is BeatRNNDetector
+
+    def test_no_architecture_field_defaults_to_single(self, tmp_path):
+        """Legacy files (no architecture field) load as single-arch.
+        Critical for not breaking the v3 deployment."""
+        weights_path = tmp_path / 'legacy.npz'
+        flat = _make_synthetic_weights(216, 64, 48, 3)
+        # No architecture field — legacy style
+        np.savez(weights_path, weights=flat, next_epoch=0, best_val_loss=0.0,
+                 input_size=216, proj_size=64, hidden_size=48, n_classes=3)
+        det = load_beat_rnn(weights_path)
+        assert type(det) is BeatRNNDetector
+
+    def test_unknown_architecture_raises(self, tmp_path):
+        weights_path = tmp_path / 'bad.npz'
+        flat = _make_synthetic_weights(216, 64, 48, 3)
+        np.savez(weights_path, weights=flat, next_epoch=0, best_val_loss=0.0,
+                 input_size=216, proj_size=64, hidden_size=48, n_classes=3,
+                 architecture=np.array('totally-new-architecture'))
+        with pytest.raises(ValueError, match='unknown architecture'):
+            load_beat_rnn(weights_path)
+
+    def test_kwargs_forward_to_detector(self, tmp_path):
+        """Per-head thresholds passed through the factory reach the
+        detector — guards against the factory dropping kwargs."""
+        weights_path = tmp_path / 'md.npz'
+        _save_multidepth_npz(weights_path, I=216, P=64, H=48, L=3)
+        det = load_beat_rnn(weights_path, downbeat_threshold=0.11,
+                             beat_threshold=0.22, onset_threshold=0.33)
+        assert det._th_downbeat == 0.11
+        assert det._th_beat == 0.22
+        assert det._th_onset == 0.33
+
+
+class TestMultiDepthHeadRouting:
+    """Verify the head-index → (downbeat/beat/onset) mapping in
+    _forward_step matches the training convention. If the mapping
+    silently swaps, the detector would misclassify every event without
+    raising — high-priority test."""
+
+    def test_head_routing_matches_training_convention(self, tmp_path):
+        """Construct a synthetic file where each head's output linear
+        is set so that — given identical hidden states — head[0]
+        produces logit 100, head[1] produces logit 0, head[2] produces
+        logit -100. After sigmoid: head[0]≈1.0, head[1]=0.5, head[2]≈0.
+
+        Multi-depth maps: head 0 → onset, head 1 → beat, head 2 →
+        downbeat. So _forward_step should return (downbeat≈0,
+        beat=0.5, onset≈1.0).
+        """
+        I, P, H, L = 216, 64, 48, 3
+        n_heads = L
+        # Start with random weights for everything BUT the heads
+        rng = np.random.default_rng(42)
+        flat = rng.standard_normal(
+            _multidepth_param_count(I, P, H, L, n_heads)).astype(np.float32)
+        # Compute the head section offset — everything up to but not
+        # including the first head's W:
+        head_start = I * P + P  # input linear
+        for k in range(L):
+            in_k = P if k == 0 else H
+            head_start += 3 * in_k * H + 3 * H * H + 6 * H
+        # Heads in order: head_0 (H, 1) + b_0 (1), head_1 (...), head_2 (...)
+        # We want each head's bias to dominate, regardless of hidden state.
+        # Zero the weights (so hidden doesn't matter) and set the biases.
+        for k in range(n_heads):
+            off = head_start + k * (H + 1)
+            flat[off:off + H] = 0.0  # W = 0
+            # Bias: pick a value the sigmoid maps to a known activation
+            flat[off + H] = (100.0, 0.0, -100.0)[k]
+
+        weights_path = tmp_path / 'routing.npz'
+        _save_multidepth_npz(weights_path, I=I, P=P, H=H, L=L, flat=flat)
+        det = MultiDepthBeatRNNDetector(weights_path)
+
+        # Run one frame — input doesn't matter (heads zero out hidden)
+        x = np.zeros(I, dtype=np.float32)
+        downbeat, beat, onset = det._forward_step(x)
+        assert onset > 0.99,    f'onset should ≈ sigmoid(100) ≈ 1; got {onset}'
+        assert abs(beat - 0.5) < 0.01, f'beat should = sigmoid(0) = 0.5; got {beat}'
+        assert downbeat < 0.01, f'downbeat should ≈ sigmoid(-100) ≈ 0; got {downbeat}'
