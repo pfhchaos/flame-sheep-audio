@@ -167,9 +167,15 @@ class AudioProcessor:
                 raise ValueError(
                     'detector.kind="rnn" requires detector.rnn_weights_path '
                     'to be set in config (path to beat_rnn_continuous.npz)')
+            def _opt_float(key):
+                v = getattr(cfg.detector, key, None)
+                return float(v) if v is not None else None
             return BeatRNNDetector(
                 weights_path,
                 threshold=float(getattr(cfg.detector, 'rnn_threshold', 0.3)),
+                downbeat_threshold=_opt_float('rnn_downbeat_threshold'),
+                beat_threshold=_opt_float('rnn_beat_threshold'),
+                onset_threshold=_opt_float('rnn_onset_threshold'),
                 min_peak_distance_frames=int(getattr(
                     cfg.detector, 'rnn_min_peak_distance_frames', 9)),
                 lookahead_frames=int(getattr(

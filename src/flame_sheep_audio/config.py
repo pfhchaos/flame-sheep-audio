@@ -53,9 +53,22 @@ DEFAULTS = {
         # 'rnn'        = BeatRNNDetector (trained continuous-activation model)
         'kind': 'percentile',
         # RNN-specific config. Only consulted when kind == 'rnn'.
-        # Empty string = error at construction; caller must supply a path.
-        'rnn_weights_path': '',
+        # Default path is the 3-head hierarchical model trained 2026-05-28.
+        # Architecture dims are auto-discovered from the file (the runtime
+        # falls back to a legacy lookup table for pre-2026-05-29 files
+        # that don't carry dim metadata).
+        'rnn_weights_path': 'flame_sheep/data/beat_rnn_3head.npz',
+        # rnn_threshold is the default per-head threshold. For multi-head
+        # models, the per-head overrides below are what you actually want
+        # to tune — different heads have different output ranges. Defaults
+        # are calibrated against the 3-head model's actual sigmoid output:
+        #   downbeat: max ~0.5 (rarest positive class)
+        #   any-beat: max ~0.85
+        #   any-onset: max ~0.85
         'rnn_threshold': 0.3,
+        'rnn_downbeat_threshold': 0.15,
+        'rnn_beat_threshold': 0.30,
+        'rnn_onset_threshold': 0.30,
         'rnn_min_peak_distance_frames': 9,   # ~100 ms at 93.75 fps
         'rnn_lookahead_frames': 9,            # ~100 ms causal latency
         'rnn_auto_reset_frames': 256,         # match training regime

@@ -58,10 +58,25 @@ from ._constants import FREQS
 #     ALL beats (incl downbeats), col 2 on ALL onsets (incl beats). The
 #     runtime classifier picks the most specific class that fired,
 #     replacing the previous spectral-flux-based kind heuristic.
-_INPUT_SIZE = 216
-_PROJ_SIZE = 64
-_HIDDEN_SIZE = 96
-_N_CLASSES = 3
+_INPUT_SIZE = 216  # fixed by the CQT engine (108 mag + 108 diff)
+
+# Default architecture for checkpoints that don't carry their own dims
+# (legacy pre-2026-05-29 files). New trainer output writes explicit
+# input_size/proj_size/hidden_size/n_classes into the .npz; the runtime
+# reads those when present and only falls back to these defaults for
+# untagged legacy files.
+_DEFAULT_PROJ_SIZE = 64
+_DEFAULT_HIDDEN_SIZE = 48
+_DEFAULT_N_CLASSES = 3
+
+# Lookup for legacy files (no explicit dim metadata in the .npz).
+# Maps flat-weight-array length → (proj_size, hidden_size, n_classes).
+# Add entries here when adopting older checkpoints that need
+# discovery support without a re-save.
+_LEGACY_ARCH_BY_FLAT_LEN: dict[int, tuple[int, int, int]] = {
+    18801: (32, 48, 1),  # v1 single-channel (beat_rnn_continuous.npz)
+    30451: (64, 48, 3),  # v3 hierarchical 3-head (beat_rnn_3head.npz)
+}
 
 # Output-channel semantics — match generate_beat_labels.py's labels_hier.
 _COL_DOWNBEAT = 0
@@ -86,10 +101,53 @@ _COL_ONSET = 2
 _CQT_SCALE_TO_TRAINING: float = 770.0
 
 
-def _unpack_weights(flat: np.ndarray) -> tuple:
+def _discover_arch(data, flat_len: int) -> tuple[int, int, int, int]:
+    """Return (input_size, proj_size, hidden_size, n_classes) for the
+    weights in `data` (an np.lib.npyio.NpzFile).
+
+    Resolution order:
+      1. Explicit fields in the .npz (preferred — trainer writes these
+         as of 2026-05-29; everything new should carry them)
+      2. Legacy lookup by `flat_len` for known pre-metadata checkpoints
+      3. Raise — file is unknown and can't be loaded blind
+
+    Why discover rather than hardcode constants: the runtime
+    _DEFAULT_* numbers won't match every checkpoint, and there's no
+    safe default for the dim that varies most (hidden_size — different
+    runs train at 48 vs 96). Reading from the file makes the runtime
+    schema-agnostic and shippable across architecture changes.
+    """
+    I = int(data['input_size']) if 'input_size' in data.files else _INPUT_SIZE
+    explicit = {}
+    for name, default in (('proj_size', _DEFAULT_PROJ_SIZE),
+                          ('hidden_size', _DEFAULT_HIDDEN_SIZE),
+                          ('n_classes', _DEFAULT_N_CLASSES)):
+        if name in data.files:
+            explicit[name] = int(data[name])
+    if 'proj_size' in explicit and 'hidden_size' in explicit and 'n_classes' in explicit:
+        return I, explicit['proj_size'], explicit['hidden_size'], explicit['n_classes']
+
+    # Fall back to known-sizes lookup for legacy files
+    if flat_len in _LEGACY_ARCH_BY_FLAT_LEN:
+        P, H, C = _LEGACY_ARCH_BY_FLAT_LEN[flat_len]
+        return I, P, H, C
+
+    raise ValueError(
+        f'Cannot determine beat-RNN architecture: weights file has '
+        f'{flat_len}-element flat array, no explicit dim fields '
+        f'(input_size/proj_size/hidden_size/n_classes), and length '
+        f'does not match a known legacy configuration '
+        f'{sorted(_LEGACY_ARCH_BY_FLAT_LEN.keys())}. Retrain (which '
+        f'writes dims automatically) or add an entry to '
+        f'_LEGACY_ARCH_BY_FLAT_LEN.'
+    )
+
+
+def _unpack_weights(flat: np.ndarray,
+                    I: int, P: int, H: int, C: int) -> tuple:
     """Slice the flat weight vector into named arrays. Layout must match
-    the order `build_beat_crnn` adds layers in."""
-    I, P, H, C = _INPUT_SIZE, _PROJ_SIZE, _HIDDEN_SIZE, _N_CLASSES
+    the order `build_beat_crnn` adds layers in. Dims (I, P, H, C) come
+    from _discover_arch — see that function for resolution rules."""
     offset = 0
     W_in = flat[offset:offset + I * P].reshape(I, P); offset += I * P
     b_in = flat[offset:offset + P]; offset += P
@@ -130,16 +188,22 @@ class BeatRNNDetector(BeatDetectorBase):
                  band_config: BandConfig | None = None,
                  freqs: np.ndarray | None = None,
                  ) -> None:
-        # Load + validate weights
+        # Load + validate weights. Architecture dims discovered from
+        # the file (explicit metadata preferred, legacy lookup fallback).
         weights_path = Path(weights_path)
         data = np.load(weights_path)
         if not hasattr(data, 'files') or 'weights' not in data.files:
             raise ValueError(
                 f'{weights_path}: expected .npz with a "weights" array')
         flat = np.asarray(data['weights'], dtype=np.float32)
+        I, P, H, C = _discover_arch(data, len(flat))
+        self._input_size = I
+        self._proj_size = P
+        self._hidden_size = H
+        self._n_classes = C
         (self._W_in, self._b_in,
          self._W_gru, self._U_gru, self._bias_gru,
-         self._W_out, self._b_out) = _unpack_weights(flat)
+         self._W_out, self._b_out) = _unpack_weights(flat, I, P, H, C)
 
         self._threshold = float(threshold)
         # Per-head thresholds default to the shared `threshold` for
@@ -173,7 +237,7 @@ class BeatRNNDetector(BeatDetectorBase):
         }
 
         # Per-frame state
-        self._h: np.ndarray = np.zeros(_HIDDEN_SIZE, dtype=np.float32)
+        self._h: np.ndarray = np.zeros(self._hidden_size, dtype=np.float32)
         self._prev_log_mag: np.ndarray | None = None
         self._frames_since_reset = 0
         # Diagnostic: track recent activations so we can periodically
