@@ -194,6 +194,17 @@ class Config:
         for cb in self._reload_callbacks:
             cb()
 
+    def reset_to_defaults(self) -> None:
+        """Wipe user overrides and restore DEFAULTS, without firing
+        reload callbacks. Tests call this to be hermetic from
+        ~/.config/flame-sheep/audio.toml — production code uses
+        reload() instead, which also re-reads the file and notifies
+        listeners.
+        """
+        import copy
+        self._data = copy.deepcopy(DEFAULTS)
+        self._ns = _to_namespace(self._data)
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._ns, name)
 
