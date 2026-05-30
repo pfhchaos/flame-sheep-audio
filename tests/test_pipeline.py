@@ -14,7 +14,7 @@ from flame_sheep_audio import AudioProcessor, SAMPLE_RATE, FFT_SIZE, HOP_SIZE
 from flame_sheep_audio.source import FeedSource
 from flame_sheep_audio._types import BeatEvent
 
-from synths import synth_kick, synth_vocal, synth_snare, synth_hihat, synth_808_kick
+from flame_sheep_audio.eval.synths import synth_kick, synth_vocal, synth_snare, synth_hihat, synth_808_kick
 from audio_helpers import make_processor, make_silence, make_sine, feed_audio
 
 
@@ -130,19 +130,10 @@ class TestPipelineVocalSuppression:
         assert lows < 5, \
             f"Male vocal at 80Hz produced {lows} false low-band onsets (expected < 5)"
 
-    def test_low_over_vocal_still_detected(self):
-        """Kick drums mixed with sustained vocal should still be detected.
-
-        Stability scaling should raise the threshold but not suppress
-        real low-band onsets — the transient exceeds the vocal's variance.
-        """
-        vocal = synth_vocal(4.0, pitch=80, amplitude=0.3)
-        low_signal = _place_hits(4.0, 0.5, synth_kick, amplitude=0.8)
-        signal = vocal + low_signal
-        events, _ = _run_pipeline(signal)
-        lows = _count_events(events, 'low')
-        assert lows >= 2, \
-            f"Low-band over vocal produced only {lows} events (expected >= 2)"
+    # test_low_over_vocal_still_detected migrated into the band-routing
+    # eval (kick_over_vocal stimulus, recall_low metric). The eval
+    # asserts recall against a baseline rather than the arbitrary ">= 2"
+    # threshold that drifted across detector revisions.
 
 
 class TestPipelineBreakDetection:
@@ -170,17 +161,8 @@ class TestPipelineBreakDetection:
 class TestPipelineBandSeparation:
     """Verify that events land in the correct bands."""
 
-    def test_low_sine_triggers_low_not_high(self):
-        """80Hz tone onset should trigger low, not high."""
-        silence = make_silence(FFT_SIZE)
-        tone = make_sine(80, FFT_SIZE * 4, amplitude=0.9)
-        signal = np.concatenate([silence] * 5 + [tone])
-        events, _ = _run_pipeline(signal)
-        lows = _count_events(events, 'low')
-        highs = _count_events(events, 'high')
-        assert lows > 0, "80Hz onset should trigger low"
-        assert highs == 0 or lows > highs, \
-            f"80Hz should primarily trigger low ({lows}), not high ({highs})"
+    # test_low_sine_triggers_low_not_high migrated into the band-routing
+    # eval (low_sine_80hz stimulus, dominance_correct_rate metric).
 
     def test_high_sine_triggers_high_not_low(self):
         """10kHz tone onset should trigger high, not low."""
@@ -229,20 +211,8 @@ class TestPipelineHarmonicEnergy:
 class TestPipelineWallOfBass:
     """Galaxy Collapse scenario: low-band onsets over sustained bass."""
 
-    def test_lows_over_sustained_bass_detected(self):
-        """Low-band hits on top of sustained bass should still fire events.
-
-        The Galaxy Collapse problem: sustained bass keeps the low band
-        magnitude high, making flux spikes relatively small. Stability
-        + headroom scaling should allow real low-band onsets through.
-        """
-        bass = _sustained_bass(4.0, freq=60, amplitude=0.6)
-        low_hits = _place_hits(4.0, 0.5, synth_kick, amplitude=0.9)
-        signal = bass + low_hits
-        events, _ = _run_pipeline(signal)
-        low_count = _count_events(events, 'low')
-        assert low_count >= 2, \
-            f"Low-band hits over sustained bass produced only {low_count} events"
+    # test_lows_over_sustained_bass_detected migrated into the band-routing
+    # eval (kick_over_sustained_bass stimulus, recall_low metric).
 
     def test_sustained_bass_alone_few_lows(self):
         """Sustained bass with no hits should produce few or no low-band events."""
@@ -252,41 +222,15 @@ class TestPipelineWallOfBass:
         assert low_count < 5, \
             f"Sustained bass produced {low_count} false low-band onsets"
 
-    def test_808_bass_with_high(self):
-        """808 sub-bass + high-band hits — bands shouldn't interfere."""
-        bass = _sustained_bass(4.0, freq=40, amplitude=0.7)
-        high_hits = _place_hits(4.0, 0.25, synth_hihat, amplitude=0.4)
-        signal = bass + high_hits
-        events, _ = _run_pipeline(signal)
-        high_count = _count_events(events, 'high')
-        low_count = _count_events(events, 'low')
-        # High should dominate, bass shouldn't trigger low
-        assert high_count > low_count, \
-            f"Expected high ({high_count}) > low ({low_count})"
+    # test_808_bass_with_high migrated into the band-routing eval
+    # (808_plus_hihat stimulus, dominance_correct_rate metric).
 
 
-class TestPipelineDensityTracking:
-    """Verify onset density responds to different patterns."""
-
-    def test_fast_lows_many_events(self):
-        """Rapid low-band hits should produce many low-band events."""
-        signal = _place_hits(4.0, 0.15, synth_kick, amplitude=0.8)
-        events, _ = _run_pipeline(signal)
-        lows = _count_events(events, 'low')
-        # 4s at ~6.7 hits/s = ~27 onsets, minus warmup/cooldown
-        assert lows >= 5, \
-            f"Fast low-band hits should produce many events, got {lows}"
-
-    def test_slow_lows_fewer_events(self):
-        """Slow low-band hits should produce fewer events than fast ones."""
-        fast = _place_hits(4.0, 0.15, synth_kick, amplitude=0.8)
-        slow = _place_hits(4.0, 1.0, synth_kick, amplitude=0.8)
-        fast_events, _ = _run_pipeline(fast)
-        slow_events, _ = _run_pipeline(slow)
-        fast_lows = _count_events(fast_events, 'low')
-        slow_lows = _count_events(slow_events, 'low')
-        assert fast_lows > slow_lows, \
-            f"Fast ({fast_lows}) should have more low-band events than slow ({slow_lows})"
+# TestPipelineDensityTracking removed — its two tests
+# (test_fast_lows_many_events, test_slow_lows_fewer_events) migrated
+# into the band-routing eval at flame_sheep_audio/eval/band_routing.py
+# under the fast_kicks + slow_kicks stimuli + density_ranking_fast_vs_slow
+# metric.
 
 
 class TestPipelineWaltz:

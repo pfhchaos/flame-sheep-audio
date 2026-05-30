@@ -101,17 +101,9 @@ class TestBeatDetection:
         assert subsequent_hits == 0, \
             f"sustained tone should not re-trigger after cooldown, got {subsequent_hits} hits"
 
-    def test_kick_frequency_triggers_kick_band(self):
-        """Strong 80Hz onset should trigger low, not mid or high."""
-        proc      = make_processor()
-        silence   = make_silence(FFT_SIZE)
-        kick_tone = make_sine(80, FFT_SIZE, amplitude=0.9)
-        self._warm_up(proc, silence)
-        feed_audio(proc, kick_tone)
-        events = proc.process()
-        kinds  = [e.kind for e in events]
-        assert 'low' in kinds, f"80Hz onset should trigger low, got {kinds}"
-        assert 'high' not in kinds, f"80Hz should not trigger high, got {kinds}"
+    # test_kick_frequency_triggers_kick_band migrated into the
+    # band-routing eval (low_sine_80hz stimulus, recall_low +
+    # dominance_correct_rate metrics).
 
     def test_beat_energy_normalized(self):
         """Beat energy should be in 0..1 range."""
