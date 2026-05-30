@@ -9,20 +9,37 @@ from flame_sheep_audio.beat_detector import BeatDetectorBase, FluxBeatDetector, 
 
 BIN_COUNTS = [108, 1025, 64]
 
-# All concrete BeatDetectorBase subclasses with factories.
+# All concrete BeatDetectorBase subclasses with bin-count-agnostic factories.
+# Used for the parametrized conformance suite below (varies n_bins from 64 to
+# 1025 and verifies the detector handles each shape).
 DETECTOR_CLASSES = [
     ("flux", lambda freqs: FluxBeatDetector(freqs=freqs)),
     ("percentile", lambda freqs: PercentileBeatDetector(freqs=freqs)),
 ]
 
+# Subclasses that opt out of the bin-count-parametrized conformance tests
+# because they have hard input-shape requirements that those tests can't
+# satisfy. BeatRNNDetector + MultiDepthBeatRNNDetector both:
+#   - require a 108-bin CQT spectrum (model trained on librosa CQT)
+#   - require an on-disk weights file
+# Their conformance is covered by tests/audio/test_beat_rnn_streaming.py
+# (real weights file, real spectrum shape).
+_BIN_COUNT_AGNOSTIC_EXEMPT = {'BeatRNNDetector', 'MultiDepthBeatRNNDetector'}
+
 
 def test_all_beat_detectors_registered():
-    """Ensure every BeatDetectorBase subclass has a test entry."""
+    """Ensure every BeatDetectorBase subclass either has a test entry in
+    DETECTOR_CLASSES (bin-count-parametrized suite) or is explicitly
+    exempt with its own dedicated tests elsewhere."""
     concrete = {cls.__name__ for cls in BeatDetectorBase.__subclasses__()}
     tested = {factory(np.linspace(20, 20000, 108).astype(np.float32)).__class__.__name__
               for _, factory in DETECTOR_CLASSES}
-    missing = concrete - tested
-    assert not missing, f"BeatDetectorBase subclasses without test entries: {missing}"
+    accounted_for = tested | _BIN_COUNT_AGNOSTIC_EXEMPT
+    missing = concrete - accounted_for
+    assert not missing, (
+        f"BeatDetectorBase subclasses without test entries: {missing}. "
+        f"Either add to DETECTOR_CLASSES (must accept arbitrary n_bins) or "
+        f"add to _BIN_COUNT_AGNOSTIC_EXEMPT with a dedicated test elsewhere.")
 
 
 class TestBeatDetectorConformance:

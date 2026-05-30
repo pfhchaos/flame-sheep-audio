@@ -5,9 +5,18 @@ Uses synthetic audio — no hardware or PipeWire required.
 
 import numpy as np
 import pytest
-from flame_sheep_audio import SAMPLE_RATE, FFT_SIZE, N_BINS
+from flame_sheep_audio import SAMPLE_RATE, FFT_SIZE
+from flame_sheep_audio._cqt_engine import CqtEngine
 
 from audio_helpers import make_processor, make_sine, make_silence, feed_audio
+
+# AudioProcessor now uses CqtEngine, which produces 108 log-spaced bins
+# (~C1 to ~C9). The old FFT_SIZE-based N_BINS=1025 no longer matches the
+# spectrum shape. Tests below derive their bin masks from the engine's
+# bin_centers so they stay correct as long as CqtEngine's range covers
+# the test frequencies.
+CQT_BIN_CENTERS = CqtEngine().bin_centers
+CQT_N_BINS = len(CQT_BIN_CENTERS)
 
 
 # ----------------------------------------------------------------
@@ -23,14 +32,19 @@ class TestSpectrum:
         assert proc.spectrum.max() < 1.0
 
     def test_sine_peaks_at_correct_bin(self):
-        """A 100Hz sine should produce a peak in the low band."""
+        """A 100Hz sine should produce a peak in the low band.
+
+        Mid mask starts at 400Hz (not 150Hz like the old FFT-based test)
+        because CQT filters have broad Q at low frequencies — a 100Hz
+        tone smears across 110-200Hz bins, putting non-trivial energy
+        in any mask that starts at 150Hz. 400Hz is well clear of the
+        100Hz tone's first-octave bleed."""
         proc = make_processor()
         feed_audio(proc, make_sine(100, FFT_SIZE * 4))
         proc.process()
-        freqs   = np.fft.rfftfreq(FFT_SIZE, 1.0 / SAMPLE_RATE)
-        low_mask = (freqs >= 20) & (freqs < 150)
-        mid_mask = (freqs >= 150) & (freqs < 800)
-        low_energy  = proc.spectrum[low_mask].max()
+        low_mask = (CQT_BIN_CENTERS >= 20) & (CQT_BIN_CENTERS < 150)
+        mid_mask = (CQT_BIN_CENTERS >= 400) & (CQT_BIN_CENTERS < 2000)
+        low_energy = proc.spectrum[low_mask].max()
         mid_energy = proc.spectrum[mid_mask].max()
         assert low_energy > mid_energy * 5, \
             f"100Hz sine should dominate low band: low={low_energy:.1f} mid={mid_energy:.1f}"
@@ -40,11 +54,10 @@ class TestSpectrum:
         proc = make_processor()
         feed_audio(proc, make_sine(10000, FFT_SIZE * 4))
         proc.process()
-        freqs      = np.fft.rfftfreq(FFT_SIZE, 1.0 / SAMPLE_RATE)
-        high_mask = freqs >= 8000
-        low_mask  = (freqs >= 20) & (freqs < 150)
+        high_mask = CQT_BIN_CENTERS >= 8000
+        low_mask = (CQT_BIN_CENTERS >= 20) & (CQT_BIN_CENTERS < 150)
         high_energy = proc.spectrum[high_mask].max()
-        low_energy  = proc.spectrum[low_mask].max()
+        low_energy = proc.spectrum[low_mask].max()
         assert high_energy > low_energy * 5, \
             f"10kHz sine should dominate high band"
 
@@ -52,7 +65,7 @@ class TestSpectrum:
         proc = make_processor()
         feed_audio(proc, make_silence(FFT_SIZE))
         proc.process()
-        assert len(proc.spectrum) == N_BINS
+        assert len(proc.spectrum) == CQT_N_BINS
 
 
 # ----------------------------------------------------------------
