@@ -1,0 +1,88 @@
+{
+  "metadata": {
+    "git_commit": "892a2f7",
+    "refresh_note": "added kick_over_sustained_bass stimulus + removed test_lows_over_sustained_bass_detected and test_kick_frequency_triggers_kick_band (intent covered by this and low_sine_80hz)",
+    "timestamp_utc": "2026-05-30T01:27:52+00:00"
+  },
+  "metrics": {
+    "density_ranking_fast_vs_slow": 0.25,
+    "dominance_correct_rate": 0.0,
+    "recall_high": 1.0,
+    "recall_low": 1.0,
+    "recall_mid": 0.0,
+    "stimuli_with_any_event": 1.0
+  },
+  "name": "band_routing",
+  "per_stimulus": {
+    "808_plus_hihat": {
+      "by_band": {
+        "high": 3,
+        "low": 4,
+        "mid": 2
+      },
+      "expected_count": 3,
+      "non_expected_count": 6,
+      "total_events": 9
+    },
+    "fast_kicks": {
+      "by_band": {
+        "high": 3,
+        "low": 1,
+        "mid": 1
+      },
+      "expected_count": 1,
+      "non_expected_count": 4,
+      "total_events": 5
+    },
+    "high_hihat_pattern": {
+      "by_band": {
+        "high": 3,
+        "low": 3,
+        "mid": 2
+      },
+      "expected_count": 3,
+      "non_expected_count": 5,
+      "total_events": 8
+    },
+    "kick_over_sustained_bass": {
+      "by_band": {
+        "high": 3,
+        "low": 1,
+        "mid": 2
+      },
+      "expected_count": 1,
+      "non_expected_count": 5,
+      "total_events": 6
+    },
+    "kick_over_vocal": {
+      "by_band": {
+        "high": 4,
+        "low": 1,
+        "mid": 1
+      },
+      "expected_count": 1,
+      "non_expected_count": 5,
+      "total_events": 6
+    },
+    "low_sine_80hz": {
+      "by_band": {
+        "high": 1,
+        "low": 1,
+        "mid": 1
+      },
+      "expected_count": 1,
+      "non_expected_count": 2,
+      "total_events": 3
+    },
+    "slow_kicks": {
+      "by_band": {
+        "high": 2,
+        "low": 3,
+        "mid": 3
+      },
+      "expected_count": 3,
+      "non_expected_count": 5,
+      "total_events": 8
+    }
+  }
+}
