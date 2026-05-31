@@ -379,14 +379,23 @@ class BeatRNNDetector(BeatDetectorBase):
         h_hat = np.tanh(wx_h + self._bias_gru[2] + r * (uh_n + self._bias_gru[5]))
         self._h = (1.0 - z) * h_hat + z * self._h
 
-        # Linear out + sigmoid for ALL three heads. Each head is an
-        # independent classifier (no softmax) — col 0 = downbeat, col 1
-        # = any-beat, col 2 = any-onset.
-        all_logits = self._h @ self._W_out + self._b_out  # (3,)
-        all_acts = _sigmoid(all_logits)  # (3,)
-        return (float(all_acts[_COL_DOWNBEAT]),
-                float(all_acts[_COL_BEAT]),
-                float(all_acts[_COL_ONSET]))
+        # Linear out + sigmoid. Each output is an independent
+        # classifier (no softmax). Layout:
+        #   n_classes=3 (v3+): col 0 = downbeat, col 1 = any-beat,
+        #                       col 2 = any-onset.
+        #   n_classes=1 (v1):  col 0 = beat (legacy single-channel)
+        all_logits = self._h @ self._W_out + self._b_out
+        all_acts = _sigmoid(all_logits)
+        if self._n_classes >= 3:
+            return (float(all_acts[_COL_DOWNBEAT]),
+                    float(all_acts[_COL_BEAT]),
+                    float(all_acts[_COL_ONSET]))
+        # v1 single-channel — treat the one output as "beat". Downbeat
+        # and onset get 0 so the inference cascade falls back to
+        # treating every fired event as a generic beat. Lower fidelity
+        # than v3 but doesn't crash on a legacy weights file.
+        beat = float(all_acts[0])
+        return (0.0, beat, 0.0)
 
     def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:
         """Process one spectrum frame; return any beat events that
