@@ -53,11 +53,12 @@ DEFAULTS = {
         # 'rnn'        = BeatRNNDetector (trained continuous-activation model)
         'kind': 'percentile',
         # RNN-specific config. Only consulted when kind == 'rnn'.
-        # Default path is the 3-head hierarchical model trained 2026-05-28.
-        # Architecture dims are auto-discovered from the file (the runtime
-        # falls back to a legacy lookup table for pre-2026-05-29 files
-        # that don't carry dim metadata).
-        'rnn_weights_path': 'flame_sheep/data/beat_rnn_3head.npz',
+        # Default path is the multidepth stacked-GRU model trained
+        # 2026-05-31 (val_loss=0.4229 mid-epoch 4 checkpoint, beats
+        # the 3head baseline). Architecture dims are auto-discovered
+        # from the file via load_beat_rnn — the 'architecture' field
+        # in the .npz dispatches to MultiDepthBeatRNNDetector.
+        'rnn_weights_path': 'flame_sheep/data/beat_rnn_multidepth.npz',
         # rnn_threshold is the default per-head threshold. For multi-head
         # models, the per-head overrides below are what you actually want
         # to tune — different heads have different output ranges. Defaults
