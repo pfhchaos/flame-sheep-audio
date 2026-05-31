@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import fcntl
 import logging
 import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 from .shm_layout import (
     SHM_NAME, SHM_SIZE,
@@ -117,6 +119,47 @@ class AudioDaemon:
             pass
 
 
+def _acquire_single_instance_lock() -> bool:
+    """Pidfile + flock so a second daemon refuses to start instead of
+    fighting the first for the audio device.
+
+    Returns True if we got the lock (proceed); False if another
+    instance already holds it (caller should exit 0 — not an error,
+    just a no-op duplicate). The fd stays open at module scope; the
+    kernel releases it on process exit.
+
+    Mirror of flame_sheep.process_util.acquire_single_instance_lock —
+    inlined here because flame_sheep_audio can't import flame_sheep
+    (the dependency runs the other way). Keep the two in sync."""
+    xdg = os.environ.get('XDG_RUNTIME_DIR')
+    base = Path(xdg) if xdg else Path(f'/tmp/flame-sheep-{os.getuid()}')
+    runtime_dir = base / 'flame-sheep'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    path = runtime_dir / 'audio.pid'
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            holder = os.read(fd, 32).decode('ascii', errors='replace').strip()
+        except OSError:
+            holder = '?'
+        os.close(fd)
+        print(f'[audio daemon] another instance already running '
+              f'(pid={holder}); exiting', file=sys.stderr)
+        return False
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    os.write(fd, f'{os.getpid()}\n'.encode('ascii'))
+    # Stash on the module so GC can't close it.
+    global _lock_fd
+    _lock_fd = fd
+    return True
+
+
+_lock_fd: int | None = None
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(description='Flame Sheep Audio Daemon')
@@ -129,6 +172,13 @@ def main():
         format='%(asctime)s %(name)s %(levelname)s %(message)s',
         datefmt='%H:%M:%S',
     )
+
+    # Refuse to start a duplicate. Two daemons fighting for the same
+    # PortAudio device would either cause one to fail with a cryptic
+    # ALSA error or — worse — both bind successfully and produce
+    # interleaved garbage to the same shmem.
+    if not _acquire_single_instance_lock():
+        sys.exit(0)
 
     daemon = AudioDaemon(device=args.device)
 
