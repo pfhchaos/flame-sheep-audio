@@ -180,7 +180,13 @@ def main():
     if not _acquire_single_instance_lock():
         sys.exit(0)
 
-    daemon = AudioDaemon(device=args.device)
+    # CLI --device wins; otherwise fall back to cfg.input.device
+    # (audio.toml [input] device = "..."); else None → sounddevice default.
+    from .config import cfg
+    device = args.device
+    if device is None:
+        device = getattr(cfg.input, 'device', None)
+    daemon = AudioDaemon(device=device)
 
     def _handle_signal(signum, frame):
         daemon.stop()

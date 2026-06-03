@@ -227,20 +227,12 @@ class BeatRNNDetector(BeatDetectorBase):
         # Band masks for kind classification. The RNN gives us *when* a
         # beat happened; the per-band energy heuristic gives us *which*
         # of the three visual-axis tiers it should drive (low → genome
-        # axis, mid → palette, high → zoom). Mirrors the band-mask
-        # convention used by PercentileBeatDetector.
-        if band_config is None:
-            band_config = default_band_config()
-        self._band_names = list(band_config.detection_band_names)
-        if freqs is None:
-            # Caller didn't pass bin frequencies — derive from CqtEngine
-            # since this detector only accepts 108-bin CQT magnitudes.
-            from ._cqt_engine import CqtEngine
-            freqs = CqtEngine().bin_centers
-        self._band_masks = {
-            b.name: (freqs >= b.freq_range[0]) & (freqs < b.freq_range[1])
-            for b in band_config.detection_bands
-        }
+        # band_config / freqs accepted for API compatibility with the
+        # other detectors, but the RNN doesn't use per-band features
+        # for classification — the model heads do that — and emits all
+        # events at fixed energy=1.0 (see emit site). Kept in the
+        # signature in case future variants want per-band fallback.
+        _ = (band_config, freqs)
 
         # Per-frame state
         self._h: np.ndarray = np.zeros(self._hidden_size, dtype=np.float32)
@@ -264,21 +256,6 @@ class BeatRNNDetector(BeatDetectorBase):
             maxlen=2 * self._lookahead + 1)
         self._onset_buffer: deque[float] = deque(
             maxlen=2 * self._lookahead + 1)
-        # Parallel buffer of per-band flux — kept for energy magnitude
-        # at emit time (model activation gives kind; band flux z-score
-        # gives "how strong was this hit relative to recent context",
-        # which is what downstream axes were tuned against).
-        self._band_flux_buffer: deque[dict] = deque(
-            maxlen=2 * self._lookahead + 1)
-        # Per-band rolling flux history for relative-spike classification
-        # (mirrors PercentileBeatDetector's per-band history). Without
-        # this, classification falls back to absolute energy which is
-        # spectrum-density-dominated and degenerate (mid always wins
-        # because music has densest mid-band content).
-        self._band_flux_history: dict[str, deque[float]] = {
-            name: deque(maxlen=43)  # ~460 ms at 93.75 fps
-            for name in self._band_names
-        }
         # Position offset for emitted beats — running frame counter
         self._frame_idx = 0
         # Frames since last emitted beat (refractory enforcement)
@@ -292,64 +269,9 @@ class BeatRNNDetector(BeatDetectorBase):
         self._prev_log_mag = None
         self._frames_since_reset = 0
         self._buffer.clear()
-        self._band_flux_buffer.clear()
-        for hist in self._band_flux_history.values():
-            hist.clear()
+        self._downbeat_buffer.clear()
+        self._onset_buffer.clear()
         self._frames_since_beat = self._min_distance
-
-    def _classify_band(self, band_flux: dict[str, float]
-                        ) -> tuple[str, float]:
-        """Pick (band_name, energy) by per-band *flux* relative to that
-        band's recent history — matches PercentileBeatDetector's
-        classification AND its energy convention so the RNN-driven
-        events sit in the same regime as the existing detectors' events.
-
-        For each band, compute how unusually high the current flux is
-        compared to its recent history (z-score = (current - median) /
-        std). Pick the band with the largest positive spike. The
-        winning band's z-score, mapped to [0, 1], becomes the event
-        energy — strong spikes (3σ+) clamp at 1.0, matching how
-        PercentileBeatDetector reported energy as
-        (flux - threshold) / threshold clamped at 1.
-
-        Why z-score rather than sigmoid output: the model activation
-        answers "is this a beat" (binary, gated by threshold). The
-        z-score answers "how strong is this beat compared to recent
-        local context" — which is what downstream axes were tuned
-        against from PercentileBeatDetector. Using activation directly
-        capped energy at ~0.6-0.7 since the model rarely outputs near
-        1.0, causing visibly weaker downstream responses.
-        """
-        best_band = self._band_names[0]
-        best_score = -float('inf')
-        # Energy default for the warmup case where no band has enough
-        # history to compute a z-score. Beats early in a song fall back
-        # to a middling value so the system doesn't pin to 0 or 1.
-        energy = 0.5
-        for name in self._band_names:
-            hist = self._band_flux_history[name]
-            current = band_flux[name]
-            if len(hist) < 5:
-                # Warm-up: order bands by absolute flux so we don't
-                # default to the first band.
-                score = current
-                this_energy: float | None = None
-            else:
-                arr = np.fromiter(hist, dtype=np.float32)
-                ref = float(np.median(arr))
-                spread = float(np.std(arr)) + 1e-9
-                score = (current - ref) / spread
-                # 3σ caps at 1.0 — empirically that's the strong-beat
-                # regime; calibrate the divisor if downstream responses
-                # are still off (lower = more aggressive = stronger
-                # response per beat).
-                this_energy = float(min(1.0, max(0.0, score / 3.0)))
-            if score > best_score:
-                best_score = score
-                best_band = name
-                if this_energy is not None:
-                    energy = this_energy
-        return best_band, energy
 
     def _forward_step(self, x: np.ndarray) -> tuple[float, float, float]:
         """Single-frame forward → (downbeat_act, beat_act, onset_act).
@@ -451,27 +373,12 @@ class BeatRNNDetector(BeatDetectorBase):
             self._h.fill(0.0)
             self._frames_since_reset = 0
 
-        # Per-band flux for kind classification. Use the daemon's frame
-        # flux (the same signal PercentileBeatDetector keys on), masked
-        # by CQT bin band.
-        band_flux_now = {}
-        flux = frame.flux
-        for name in self._band_names:
-            mask = self._band_masks[name]
-            band_flux_now[name] = (float(flux[mask].mean())
-                                    if mask.any() else 0.0)
-            # Update history with the just-now value (used by future
-            # frames' classification — past values relative to which
-            # the current spike is measured).
-            self._band_flux_history[name].append(band_flux_now[name])
-
-        # Causal peak picker: push all three head activations + band flux,
-        # check the buffer's center frame (which has now seen lookahead
-        # frames on both sides).
+        # Causal peak picker: push all three head activations, check the
+        # buffer's center frame (which has now seen lookahead frames on
+        # both sides).
         self._buffer.append(activation)
         self._downbeat_buffer.append(downbeat_act)
         self._onset_buffer.append(onset_act)
-        self._band_flux_buffer.append(band_flux_now)
         if len(self._buffer) < self._buffer.maxlen:
             return []  # buffer warming up; no decisions yet
 
@@ -514,16 +421,20 @@ class BeatRNNDetector(BeatDetectorBase):
         self._frames_since_beat = 0
         self._emissions_since_diag_log += 1
 
-        # Energy still comes from band-flux z-score (downstream axes were
-        # tuned against PercentileBeatDetector's energy convention, not
-        # against sigmoid activation magnitude). Use the band that
-        # corresponds to the model's kind decision.
-        _, energy = self._classify_band(self._band_flux_buffer[L])
+        # Binary event energy (2026-06-02). Per-band flux z-score was
+        # the original strength signal; in practice it 41%-saturated at
+        # 1.0 anyway and was originally added to mask overfiring. With
+        # tuned per-head thresholds the detector now only fires on
+        # confident events, and continuous signals (RMS, iteration
+        # scaling, brightness) carry the "loud vs quiet right now"
+        # information frame-by-frame. Discrete events stay simple:
+        # they happened, full strength.
+        energy = 1.0
         log.debug(
             '[beat_rnn] emit kind=%s (band=%s) acts=(d=%.3f b=%.3f o=%.3f) '
-            'energy=%.3f frame=%d',
+            'frame=%d',
             kind_role, kind_band, center_downbeat, center, center_onset,
-            energy, self._frame_idx - L)
+            self._frame_idx - L)
         # Emit with the band name (low/mid/high) so role_mapper's existing
         # band→role mapping handles the rest. role_mapper currently maps
         # low→downbeat, mid→backbeat, high→subdivision — which lines up
@@ -681,16 +592,10 @@ class MultiDepthBeatRNNDetector(BeatRNNDetector):
         self._lookahead = int(lookahead_frames)
         self._auto_reset = int(auto_reset_frames)
 
-        if band_config is None:
-            band_config = default_band_config()
-        self._band_names = list(band_config.detection_band_names)
-        if freqs is None:
-            from ._cqt_engine import CqtEngine
-            freqs = CqtEngine().bin_centers
-        self._band_masks = {
-            b.name: (freqs >= b.freq_range[0]) & (freqs < b.freq_range[1])
-            for b in band_config.detection_bands
-        }
+        # band_config / freqs accepted for API parity (see base class
+        # comment). All event energy is fixed at 1.0; per-band features
+        # are unused.
+        _ = (band_config, freqs)
 
         # Per-frame state (mirrors BeatRNNDetector's init body)
         self._prev_log_mag: np.ndarray | None = None
@@ -704,12 +609,6 @@ class MultiDepthBeatRNNDetector(BeatRNNDetector):
             maxlen=2 * self._lookahead + 1)
         self._onset_buffer: deque[float] = deque(
             maxlen=2 * self._lookahead + 1)
-        self._band_flux_buffer: deque[dict] = deque(
-            maxlen=2 * self._lookahead + 1)
-        self._band_flux_history: dict[str, deque[float]] = {
-            name: deque(maxlen=43)
-            for name in self._band_names
-        }
         self._frame_idx = 0
         self._frames_since_beat = self._min_distance
 
@@ -720,9 +619,8 @@ class MultiDepthBeatRNNDetector(BeatRNNDetector):
         self._prev_log_mag = None
         self._frames_since_reset = 0
         self._buffer.clear()
-        self._band_flux_buffer.clear()
-        for hist in self._band_flux_history.values():
-            hist.clear()
+        self._downbeat_buffer.clear()
+        self._onset_buffer.clear()
         self._frames_since_beat = self._min_distance
 
     def _forward_step(self, x: np.ndarray) -> tuple[float, float, float]:

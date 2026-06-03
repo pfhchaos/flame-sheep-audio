@@ -132,6 +132,16 @@ DEFAULTS = {
         'repulsion_strength': 0.1,
         'flux_pull_strength': 0.5,
     },
+    'input': {
+        # Audio capture device name or numeric index as resolved by
+        # PortAudio (see `python -m sounddevice` for the list). None
+        # means "sounddevice default" — usually the system mic, which
+        # is rarely what you want for music visualization. Set to the
+        # speaker-loopback monitor (e.g. 'Speakers' on the typical
+        # pipewire/pulse setup) to capture what's playing instead.
+        # CLI --device wins over this config value when both are set.
+        'device': None,
+    },
 }
 
 
