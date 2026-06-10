@@ -53,6 +53,12 @@ class AudioDbusService:
 
             DBusGMainLoop(set_as_default=True)
             bus = dbus.SessionBus()
+            # Singleton enforcement happens at the OS layer
+            # (pidfile + flock in daemon.py); the dbus name claim here
+            # uses defaults (queue-on-conflict). Adding do_not_queue=True
+            # here caused new-daemon claim races during systemd restart
+            # cycles where the BusName object would be created but the
+            # name not actually owned — see 2026-06-09 debugging session.
             self._bus_name = dbus.service.BusName(BUS_NAME, bus)
 
             # Define the service object inline (needs dbus imported)
