@@ -48,10 +48,28 @@ DEFAULTS = {
     },
     'detector': {
         # Which beat detector implementation the daemon uses.
-        # 'percentile' = PercentileBeatDetector (default; current production)
-        # 'flux'       = FluxBeatDetector (legacy; still selectable)
-        # 'rnn'        = BeatRNNDetector (trained continuous-activation model)
+        # 'percentile'    = PercentileBeatDetector (default; current production)
+        # 'flux'          = FluxBeatDetector (legacy; still selectable)
+        # 'rnn'           = BeatRNNDetector (trained continuous-activation model)
+        # 'beatnet_lite'  = BeatNetLiveDetector (pure-numpy BeatNet, ~2MB
+        #                   install; deploy-candidate per scorecard
+        #                   2026-06-08, gated on listen-test)
         'kind': 'percentile',
+        # BeatNet-lite config. Only consulted when kind == 'beatnet_lite'.
+        # `beatnet_model_index`: 1 (GTZAN-trained, default), 2 (Ballroom),
+        #   3 (Rock). Weights path is auto-resolved from
+        #   `flame_sheep/data/beatnet_m{N}_lite.npz` unless overridden.
+        # `beatnet_peak_threshold`: any-beat (1-non_beat) peak threshold.
+        # `beatnet_downbeat_threshold`: downbeat channel threshold; typically
+        #   lower than the beat threshold because downbeat activations are
+        #   sparser/smaller than beat ones.
+        # `beatnet_min_distance_frames`: refractory at BeatNet's 50 fps frame
+        #   rate (3 frames = 60 ms, ~333 BPM ceiling).
+        'beatnet_model_index': 1,
+        'beatnet_weights_path': None,
+        'beatnet_peak_threshold': 0.3,
+        'beatnet_downbeat_threshold': 0.15,
+        'beatnet_min_distance_frames': 3,
         # RNN-specific config. Only consulted when kind == 'rnn'.
         # Default path is the multidepth stacked-GRU model trained
         # 2026-05-31 (val_loss=0.4229 mid-epoch 4 checkpoint, beats

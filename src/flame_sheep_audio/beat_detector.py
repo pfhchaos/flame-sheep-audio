@@ -33,7 +33,19 @@ class BeatDetectorBase(ABC):
       - Accept any bin count via freqs parameter
       - Return BeatEvents with kind matching configured band names
       - Support reset_bands() for song changes
+
+    Implementations MAY override `feed_audio_hop(hop)` to receive raw
+    audio samples (HOP_SIZE @ daemon SAMPLE_RATE) in addition to the
+    spectrum frame. Detectors that need raw audio (e.g. neural-net
+    detectors with their own STFT pipeline) buffer it here; the
+    default is a no-op so existing spectrum-only detectors don't
+    need to change. Called by AudioProcessor right before `detect()`
+    each hop.
     """
+
+    def feed_audio_hop(self, hop: np.ndarray) -> None:
+        """Optional raw-audio feed. Default no-op."""
+        return None
 
     @abstractmethod
     def detect(self, frame: SpectrumFrame) -> list[BeatEvent]:

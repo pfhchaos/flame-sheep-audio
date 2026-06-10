@@ -97,15 +97,49 @@ class AudioProcessor:
         # Auto-detect: FeedSource is synchronous, everything else is threaded
         self._threaded = not isinstance(self._source, FeedSource)
 
-        # Tempo tracker: prefer BTrack (real-time beat tracker) over ACF
+        # Tempo tracker selection. If the beat detector is BeatNet-based,
+        # use its PF as the tempo source (it tracks tempo as part of the
+        # particle-state space; we just smooth its output). Otherwise
+        # fall back to BTrack (real-time) or ACF (no native lib).
         frame_duration = (HOP_SIZE if self._threaded else FFT_SIZE) / SAMPLE_RATE
-        try:
-            from .tempo_btrack import BTrackTempoTracker
-            self._tempo = BTrackTempoTracker(hop_size=HOP_SIZE, sample_rate=SAMPLE_RATE)
-            self._tempo_has_audio = True
-        except ImportError:
-            self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
+        from .beat_detector_beatnet import BeatNetLiveDetector
+        # Side-car BTrack: when BeatNet is primary, BTrack still runs
+        # in parallel and provides a confidence-driven hint to the PF
+        # via multi-octave injection. None when BTrack unavailable
+        # (ImportError on the native lib).
+        self._btrack_hinter = None
+        # How often to consider hinting (in hops). 100 hops @ 10.7ms = ~1.07s.
+        self._hint_check_interval_hops = 100
+        # PF confidence floor below which we consider hinting from BTrack.
+        self._hint_pf_conf_floor = 0.10
+        # BTrack confidence ceiling — we only hint when BTrack itself
+        # looks plausible. Confidence proxy from cumulative score.
+        self._hint_btrack_conf_min = 0.50
+        self._hint_check_counter = 0
+        if isinstance(self._detector, BeatNetLiveDetector) \
+                and getattr(self._detector, '_use_pf', False):
+            from .tempo_beatnet import BeatNetTempoTracker
+            self._tempo = BeatNetTempoTracker(self._detector)
+            # BeatNetTempoTracker has no native audio path — the
+            # detector already consumed the hop. feed()/feed_audio()
+            # just sample the PF. Use the onset-density code path so
+            # the BTrack-specific audio handoff is skipped.
             self._tempo_has_audio = False
+            # Start the side-car BTrack only when PF is the primary tempo.
+            try:
+                from .tempo_btrack import BTrackTempoTracker
+                self._btrack_hinter = BTrackTempoTracker(
+                    hop_size=HOP_SIZE, sample_rate=SAMPLE_RATE)
+            except ImportError:
+                self._btrack_hinter = None
+        else:
+            try:
+                from .tempo_btrack import BTrackTempoTracker
+                self._tempo = BTrackTempoTracker(hop_size=HOP_SIZE, sample_rate=SAMPLE_RATE)
+                self._tempo_has_audio = True
+            except ImportError:
+                self._tempo = AutocorrelationTempoTracker(hop_duration=frame_duration)
+                self._tempo_has_audio = False
 
         # Tempo-adaptive constant scaler
         from .tempo_scaler import TempoScaler
@@ -160,6 +194,22 @@ class AudioProcessor:
                                           freqs=freqs)
         if kind == 'flux':
             return FluxBeatDetector(band_config=band_config, freqs=freqs)
+        if kind == 'beatnet_lite':
+            from .beat_detector_beatnet import BeatNetLiveDetector
+            return BeatNetLiveDetector(
+                model_index=int(getattr(cfg.detector, 'beatnet_model_index', 1)),
+                weights_path=(getattr(cfg.detector, 'beatnet_weights_path', None)
+                              or None),
+                peak_threshold=float(getattr(cfg.detector, 'beatnet_peak_threshold', 0.3)),
+                downbeat_threshold=float(getattr(
+                    cfg.detector, 'beatnet_downbeat_threshold', 0.15)),
+                min_distance_frames=int(getattr(
+                    cfg.detector, 'beatnet_min_distance_frames', 3)),
+                use_particle_filter=bool(getattr(
+                    cfg.detector, 'beatnet_use_particle_filter', True)),
+                band_config=band_config,
+                freqs=freqs,
+            )
         if kind == 'rnn':
             from .beat_rnn import load_beat_rnn
             weights_path = getattr(cfg.detector, 'rnn_weights_path', '')
@@ -219,6 +269,44 @@ class AudioProcessor:
         self._drop_detector.reset()
         self._bass_drop_detector.reset()
 
+    def _maybe_hint_pf_from_btrack(self) -> None:
+        """Periodic confidence-driven hint from BTrack into the PF.
+
+        Fires when the PF's tempo confidence is low (cold-start or
+        loss-of-lock) AND BTrack reports a strong signal. We hint at
+        multi-octaves (0.5×, 1×, 2×) so BTrack's well-known octave
+        errors get dispatched to PF activations, which then pick the
+        right octave.
+        """
+        if self._btrack_hinter is None:
+            return
+        # PF confidence — read through the BeatNetTempoTracker if it's
+        # in use; otherwise the tempo tracker isn't PF-driven so this
+        # whole code path shouldn't be active.
+        pf_conf = float(getattr(self._tempo, 'confidence', 0.0))
+        if pf_conf >= self._hint_pf_conf_floor:
+            return
+        btrack_conf = float(self._btrack_hinter.confidence)
+        btrack_bpm = float(self._btrack_hinter.effective_bpm)
+        if btrack_conf < self._hint_btrack_conf_min:
+            log.debug('[hint] PF low (conf=%.3f) but BTrack also weak '
+                      '(conf=%.3f, bpm=%.1f) — holding',
+                      pf_conf, btrack_conf, btrack_bpm)
+            return
+        if btrack_bpm <= 0:
+            return
+        # The hint goes to the daemon-side tempo tracker, which in
+        # the BeatNet case forwards to detector.hint_tempo_octaves.
+        try:
+            self._tempo.hint_tempo(btrack_bpm)
+            log.debug('[hint] PF→BTrack hint fired: PF conf=%.3f, '
+                      'BTrack bpm=%.1f (conf=%.3f), '
+                      'multi-octave injection at 0.5x/1x/2x',
+                      pf_conf, btrack_bpm, btrack_conf)
+        except Exception as e:
+            # Never let a hint failure kill the audio loop.
+            log.debug('[hint] PF←BTrack hint failed: %s', e)
+
     def start(self) -> None:
         self._source.start()
         if self._threaded:
@@ -264,6 +352,12 @@ class AudioProcessor:
             self._energy.update(frame.magnitude, frame.flux,
                                 stability=self._stability)
 
+            # Optional raw-audio feed for detectors that need it
+            # (e.g. BeatNet adapter, which runs its own STFT pipeline).
+            # Default base implementation is a no-op so existing
+            # spectrum-only detectors don't pay any cost.
+            self._detector.feed_audio_hop(hop)
+
             # Beat detection from CSD flux (no HPSS needed)
             events = self._detector.detect(csd_frame)
 
@@ -274,6 +368,17 @@ class AudioProcessor:
                 onset_str = float(np.dot(csd_frame.flux, self._energy._a_weights))
                 total_density = sum(self._density.densities_slow.values())
                 self._tempo.feed(onset_str, onset_density=total_density)
+
+            # Side-car BTrack runs in parallel when BeatNet PF is primary;
+            # provides a confidence-driven multi-octave hint to the PF.
+            # No-op when not configured (None).
+            if self._btrack_hinter is not None:
+                self._btrack_hinter.feed_audio(hop)
+                self._hint_check_counter += 1
+                if self._hint_check_counter >= self._hint_check_interval_hops:
+                    self._hint_check_counter = 0
+                    self._maybe_hint_pf_from_btrack()
+
             self._scaler.update(self._tempo.effective_bpm)
             self._energy.update_tempo(self._tempo.effective_bpm)
 
@@ -456,6 +561,10 @@ class AudioProcessor:
         self._stability.update(frame.magnitude)
         self._energy.update(frame.magnitude, frame.flux,
                             stability=self._stability)
+
+        # Mirror the threaded loop's raw-audio feed for detectors that
+        # need it (BeatNet adapter, etc.). Default base is no-op.
+        self._detector.feed_audio_hop(pcm)
 
         # Beat detection from CSD flux (no HPSS needed)
         events = self._detector.detect(csd_frame)
