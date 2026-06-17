@@ -19,6 +19,14 @@ from collections.abc import Callable
 import numpy as np
 import sounddevice as sd
 
+# sd_notify lets the daemon ping systemd's watchdog. Optional — falls
+# back to no-op if systemd-python isn't installed (test envs, sync mode
+# from non-daemon callers).
+try:
+    from systemd.daemon import notify as _sd_notify
+except ImportError:
+    _sd_notify = None  # type: ignore[assignment]
+
 from ._constants import SAMPLE_RATE, FFT_SIZE, N_BINS, HOP_SIZE, FREQS
 from ._types import BeatEvent, BandState, AudioState, AudioSnapshot
 from ._spectrum import SpectrumEngineBase
@@ -333,148 +341,181 @@ class AudioProcessor:
     # ------------------------------------------------------------------
 
     def _audio_loop(self) -> None:
-        """Runs in daemon thread. Reads hops, analyses, publishes."""
+        """Runs in daemon thread. Reads hops, analyses, publishes.
+
+        Per-hop work is wrapped in try/except so a single bad frame
+        (e.g. a numerical edge case in a downstream detector — BeatNet's
+        particle-filter resample hit IndexError on 2026-06-14 and killed
+        the thread silently for 2.5 days) logs and continues instead.
+        Without this, the wallpaper sees frozen shmem features with no
+        surface signal that anything is wrong.
+        """
         detection_names = set(self._band_config.detection_band_names)
+        per_hop_error_count = 0
         while self._running:
             hop = self._source.read_hop(HOP_SIZE)
             if hop is None:
                 break  # source stopped
-            hop = self._agc.process(hop)
+            try:
+                hop = self._agc.process(hop)
 
-            now = time.perf_counter()
-            raw_frame = self._spectrum_engine.push_hop(hop)
+                now = time.perf_counter()
+                raw_frame = self._spectrum_engine.push_hop(hop)
 
-            # CSD on raw frame for onset detection (before log transform)
-            csd_frame = self._csd(raw_frame)
+                # CSD on raw frame for onset detection (before log transform)
+                csd_frame = self._csd(raw_frame)
 
-            frame = self._log_mag(raw_frame)
-            self._stability.update(frame.magnitude)
-            self._energy.update(frame.magnitude, frame.flux,
-                                stability=self._stability)
+                frame = self._log_mag(raw_frame)
+                self._stability.update(frame.magnitude)
+                self._energy.update(frame.magnitude, frame.flux,
+                                    stability=self._stability)
 
-            # Optional raw-audio feed for detectors that need it
-            # (e.g. BeatNet adapter, which runs its own STFT pipeline).
-            # Default base implementation is a no-op so existing
-            # spectrum-only detectors don't pay any cost.
-            self._detector.feed_audio_hop(hop)
+                # Optional raw-audio feed for detectors that need it
+                # (e.g. BeatNet adapter, which runs its own STFT pipeline).
+                # Default base implementation is a no-op so existing
+                # spectrum-only detectors don't pay any cost.
+                self._detector.feed_audio_hop(hop)
 
-            # Beat detection from CSD flux (no HPSS needed)
-            events = self._detector.detect(csd_frame)
+                # Beat detection from CSD flux (no HPSS needed)
+                events = self._detector.detect(csd_frame)
 
-            # Feed tempo tracker — BTrack prefers raw audio, ACF uses onset strength
-            if self._tempo_has_audio:
-                self._tempo.feed_audio(hop)
-            else:
-                onset_str = float(np.dot(csd_frame.flux, self._energy._a_weights))
-                total_density = sum(self._density.densities_slow.values())
-                self._tempo.feed(onset_str, onset_density=total_density)
-
-            # Side-car BTrack runs in parallel when BeatNet PF is primary;
-            # provides a confidence-driven multi-octave hint to the PF.
-            # No-op when not configured (None).
-            if self._btrack_hinter is not None:
-                self._btrack_hinter.feed_audio(hop)
-                self._hint_check_counter += 1
-                if self._hint_check_counter >= self._hint_check_interval_hops:
-                    self._hint_check_counter = 0
-                    self._maybe_hint_pf_from_btrack()
-
-            self._scaler.update(self._tempo.effective_bpm)
-            self._energy.update_tempo(self._tempo.effective_bpm)
-
-            # Feed density tracker
-            for event in events:
-                if event.kind in detection_names:
-                    self._density.process_onset(event.kind, now)
-            self._density.update(now)
-            self._detector._bpm = self._tempo.effective_bpm
-
-            with self._data_ready:
-                self._pending_events.extend(events)
-                if self._spectrum is None:
-                    self._spectrum = frame.magnitude.copy()
+                # Feed tempo tracker — BTrack prefers raw audio, ACF uses onset strength
+                if self._tempo_has_audio:
+                    self._tempo.feed_audio(hop)
                 else:
-                    self._spectrum[:] = frame.magnitude
-                stab_bins = self._stability.stability_per_bin()
-                if self._stability_bins is None:
-                    self._stability_bins = stab_bins.copy()
-                else:
-                    self._stability_bins[:] = stab_bins
-                sust = getattr(self._stability, 'sustained_magnitude', lambda: None)()
-                if sust is not None:
-                    if self._sustained_bins is None:
-                        self._sustained_bins = sust.copy()
+                    onset_str = float(np.dot(csd_frame.flux, self._energy._a_weights))
+                    total_density = sum(self._density.densities_slow.values())
+                    self._tempo.feed(onset_str, onset_density=total_density)
+
+                # Side-car BTrack runs in parallel when BeatNet PF is primary;
+                # provides a confidence-driven multi-octave hint to the PF.
+                # No-op when not configured (None).
+                if self._btrack_hinter is not None:
+                    self._btrack_hinter.feed_audio(hop)
+                    self._hint_check_counter += 1
+                    if self._hint_check_counter >= self._hint_check_interval_hops:
+                        self._hint_check_counter = 0
+                        self._maybe_hint_pf_from_btrack()
+
+                self._scaler.update(self._tempo.effective_bpm)
+                self._energy.update_tempo(self._tempo.effective_bpm)
+
+                # Feed density tracker
+                for event in events:
+                    if event.kind in detection_names:
+                        self._density.process_onset(event.kind, now)
+                self._density.update(now)
+                self._detector._bpm = self._tempo.effective_bpm
+
+                with self._data_ready:
+                    self._pending_events.extend(events)
+                    if self._spectrum is None:
+                        self._spectrum = frame.magnitude.copy()
                     else:
-                        self._sustained_bins[:] = sust
-                if self._waveform is None or self._waveform.shape != frame.waveform.shape:
-                    self._waveform = frame.waveform.copy()
-                else:
-                    self._waveform[:] = frame.waveform
-                self._centroid = self._energy.centroid
-                self._centroid_delta = self._energy.centroid_delta
-                self._centroid_rms = self._energy.centroid_rms
-                self._centroid_harmonic_rms = self._energy.harmonic_centroid_rms
-                self._slow_centroid_harmonic_rms = self._energy.slow_harmonic_centroid_rms
-                self._percussiveness = self._energy.percussiveness
-                self._spectral_novelty = self._energy.spectral_novelty
-                self._section_change = self._energy.section_change
-                self._bpm = self._tempo.bpm
-                self._effective_bpm = self._tempo.effective_bpm
-                self._tempo_confidence = self._tempo.confidence
-                self._tempo_saturated = self._tempo.saturated
-                # Build per-band state
-                band_rms = self._energy.band_rms_all
-                band_hrms = self._energy.band_harmonic_rms_all
-                band_slow = self._energy.band_slow_rms_all
-                band_slow_h = self._energy.band_slow_harmonic_rms_all
-                densities = self._density.densities
-                density_deltas = self._density.density_deltas
-                for name in self._bands:
-                    self._bands[name] = BandState(
-                        rms=band_rms.get(name, 0.0),
-                        harmonic_rms=band_hrms.get(name, 0.0),
-                        slow_rms=band_slow.get(name, 0.0),
-                        slow_harmonic_rms=band_slow_h.get(name, 0.0),
-                        onset_density=densities.get(name, 0.0),
-                        density_delta=density_deltas.get(name, 0.0),
+                        self._spectrum[:] = frame.magnitude
+                    stab_bins = self._stability.stability_per_bin()
+                    if self._stability_bins is None:
+                        self._stability_bins = stab_bins.copy()
+                    else:
+                        self._stability_bins[:] = stab_bins
+                    sust = getattr(self._stability, 'sustained_magnitude', lambda: None)()
+                    if sust is not None:
+                        if self._sustained_bins is None:
+                            self._sustained_bins = sust.copy()
+                        else:
+                            self._sustained_bins[:] = sust
+                    if self._waveform is None or self._waveform.shape != frame.waveform.shape:
+                        self._waveform = frame.waveform.copy()
+                    else:
+                        self._waveform[:] = frame.waveform
+                    self._centroid = self._energy.centroid
+                    self._centroid_delta = self._energy.centroid_delta
+                    self._centroid_rms = self._energy.centroid_rms
+                    self._centroid_harmonic_rms = self._energy.harmonic_centroid_rms
+                    self._slow_centroid_harmonic_rms = self._energy.slow_harmonic_centroid_rms
+                    self._percussiveness = self._energy.percussiveness
+                    self._spectral_novelty = self._energy.spectral_novelty
+                    self._section_change = self._energy.section_change
+                    self._bpm = self._tempo.bpm
+                    self._effective_bpm = self._tempo.effective_bpm
+                    self._tempo_confidence = self._tempo.confidence
+                    self._tempo_saturated = self._tempo.saturated
+                    # Build per-band state
+                    band_rms = self._energy.band_rms_all
+                    band_hrms = self._energy.band_harmonic_rms_all
+                    band_slow = self._energy.band_slow_rms_all
+                    band_slow_h = self._energy.band_slow_harmonic_rms_all
+                    densities = self._density.densities
+                    density_deltas = self._density.density_deltas
+                    for name in self._bands:
+                        self._bands[name] = BandState(
+                            rms=band_rms.get(name, 0.0),
+                            harmonic_rms=band_hrms.get(name, 0.0),
+                            slow_rms=band_slow.get(name, 0.0),
+                            slow_harmonic_rms=band_slow_h.get(name, 0.0),
+                            onset_density=densities.get(name, 0.0),
+                            density_delta=density_deltas.get(name, 0.0),
+                        )
+
+                    # Mode detection + break detectors
+                    audio_state = AudioState(
+                        events=events,
+                        bands=dict(self._bands),
+                        centroid=self._centroid,
+                        centroid_delta=self._centroid_delta,
+                        centroid_rms=self._centroid_rms,
+                        centroid_harmonic_rms=self._centroid_harmonic_rms,
+                        slow_centroid_harmonic_rms=self._slow_centroid_harmonic_rms,
+                        percussiveness=self._percussiveness,
+                        spectral_novelty=self._spectral_novelty,
+                        section_change=self._section_change,
+                        bpm=self._bpm,
+                        effective_bpm=self._effective_bpm,
+                        tempo_confidence=self._tempo_confidence,
+                        tempo_saturated=self._tempo_saturated,
                     )
+                    self._mode_detector.tick(audio_state)
+                    is_idle = self._mode_detector.mode.value == 'idle'
+                    self._mode = self._mode_detector.mode.value
 
-                # Mode detection + break detectors
-                audio_state = AudioState(
-                    events=events,
-                    bands=dict(self._bands),
-                    centroid=self._centroid,
-                    centroid_delta=self._centroid_delta,
-                    centroid_rms=self._centroid_rms,
-                    centroid_harmonic_rms=self._centroid_harmonic_rms,
-                    slow_centroid_harmonic_rms=self._slow_centroid_harmonic_rms,
-                    percussiveness=self._percussiveness,
-                    spectral_novelty=self._spectral_novelty,
-                    section_change=self._section_change,
-                    bpm=self._bpm,
-                    effective_bpm=self._effective_bpm,
-                    tempo_confidence=self._tempo_confidence,
-                    tempo_saturated=self._tempo_saturated,
-                )
-                self._mode_detector.tick(audio_state)
-                is_idle = self._mode_detector.mode.value == 'idle'
-                self._mode = self._mode_detector.mode.value
-
-                is_beat_mode = self._mode == 'beat'
-                if cfg.breaks.enabled and is_beat_mode:
-                    self._drop_detector.detect(
-                        events, self._centroid_rms,
-                        self._bpm, not is_beat_mode, self._frame_dt)
-                    subbass_rms = self._bands.get('subbass', BandState()).rms
-                    self._bass_drop_detector.detect(
-                        events, subbass_rms,
-                        self._bpm, not is_beat_mode, self._frame_dt)
-                    self._break_intensity = max(
-                        self._drop_detector.break_intensity,
-                        self._bass_drop_detector.break_intensity)
+                    is_beat_mode = self._mode == 'beat'
+                    if cfg.breaks.enabled and is_beat_mode:
+                        self._drop_detector.detect(
+                            events, self._centroid_rms,
+                            self._bpm, not is_beat_mode, self._frame_dt)
+                        subbass_rms = self._bands.get('subbass', BandState()).rms
+                        self._bass_drop_detector.detect(
+                            events, subbass_rms,
+                            self._bpm, not is_beat_mode, self._frame_dt)
+                        self._break_intensity = max(
+                            self._drop_detector.break_intensity,
+                            self._bass_drop_detector.break_intensity)
+                    else:
+                        self._break_intensity = 0.0
+                    self._data_ready.notify_all()
+                # Watchdog ping. Systemd kills + restarts the unit if
+                # no ping arrives within WatchdogSec. We only ping in
+                # the success path, so a deterministic all-failures
+                # burst (e.g. detector that crashes on every frame)
+                # naturally triggers restart instead of looping
+                # forever swallowing exceptions.
+                if _sd_notify is not None:
+                    _sd_notify('WATCHDOG=1')
+            except Exception as e:
+                per_hop_error_count += 1
+                if per_hop_error_count <= 5:
+                    log.warning('audio-analysis frame failed (count=%d): %s',
+                                per_hop_error_count, e, exc_info=True)
+                elif per_hop_error_count == 6:
+                    log.warning('audio-analysis frame failures continuing — '
+                                'suppressing further WARNING logs '
+                                '(subsequent failures at DEBUG)')
                 else:
-                    self._break_intensity = 0.0
-                self._data_ready.notify_all()
+                    log.debug('audio-analysis frame failed (count=%d): %s',
+                              per_hop_error_count, e)
+                # Brief sleep to avoid tight-loop pathology when the
+                # failure is deterministic across every frame.
+                time.sleep(0.01)
 
     def drain(self) -> AudioSnapshot:
         """Atomically read and clear accumulated audio state.
