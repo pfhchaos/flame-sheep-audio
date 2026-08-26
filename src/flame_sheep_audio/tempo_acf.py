@@ -20,6 +20,8 @@ References:
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from collections import deque
 
@@ -59,8 +61,13 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
         prior_width = cfg.tempo.prior_width
         self._SMOOTH_ALPHA = cfg.tempo.smooth_alpha
         self._CONFIDENCE_THRESHOLD = cfg.tempo.confidence_threshold
-        self._LOCK_THRESHOLD = cfg.tempo.lock_threshold
-        self._UNLOCK_THRESHOLD = cfg.tempo.unlock_threshold
+        # Threshold above which the current estimate is trustworthy
+        # enough to anchor _last_confident_bpm (the value effective_bpm
+        # blends toward when confidence drops). Re-uses the config key
+        # formerly used for lock/unlock hysteresis; the hysteresis is
+        # gone, but the threshold's role as "trustworthy enough to
+        # remember" still applies.
+        self._CONFIDENT_THRESHOLD = cfg.tempo.lock_threshold
 
         # Ring buffer for onset strength
         self._buffer_size = int(window_seconds / hop_duration)
@@ -87,8 +94,14 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
         self._bpm = 0.0
         self._raw_bpm = 0.0
         self._confidence = 0.0
-        self._locked = False
         self._has_estimate = False
+
+        # Per-component wall-clock timing. Mirrors the BeatDetector
+        # last_timing contract (eval framework §7) so the same scorecard
+        # aggregator handles both. Components: 'feed' (per-frame buffer
+        # write), 'update' (ACF + peak picking + confidence). 'total'
+        # is the sum.
+        self._last_timing: dict[str, float] = {'total': 0.0}
 
         # Temporal confidence: ring buffer of recent BPM estimates
         self._recent_bpms: list[float] = []
@@ -112,16 +125,32 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
 
     def feed(self, onset_strength: float, onset_density: float = 0.0) -> None:
         """Feed one frame of onset strength and total onset density."""
+        t0 = time.perf_counter()
         self._onset_density = onset_density
         self._buffer[self._write_pos] = onset_strength
         self._write_pos = (self._write_pos + 1) % self._buffer_size
         self._frames_fed += 1
         self._frames_since_update += 1
+        feed_elapsed = time.perf_counter() - t0
 
+        update_elapsed = 0.0
         if self._frames_since_update >= self._update_every:
             self._frames_since_update = 0
             if self._frames_fed >= self._buffer_size // 2:
+                t_update = time.perf_counter()
                 self._update()
+                update_elapsed = time.perf_counter() - t_update
+
+        # Accumulate timing — totals across the tracker lifetime, not
+        # per-call. Consumers compute deltas if they want per-window.
+        self._last_timing['feed'] = (
+            self._last_timing.get('feed', 0.0) + feed_elapsed)
+        if update_elapsed > 0.0:
+            self._last_timing['update'] = (
+                self._last_timing.get('update', 0.0) + update_elapsed)
+        self._last_timing['total'] = (
+            self._last_timing['feed']
+            + self._last_timing.get('update', 0.0))
 
     def _update(self) -> None:
         """Recompute tempo estimate from autocorrelation."""
@@ -238,12 +267,13 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
         capped_temporal = min(self._temporal_confidence, confidence * 2.5)
         self._confidence = max(confidence, capped_temporal)
 
-        # Update last confident BPM
-        if self._confidence >= self._LOCK_THRESHOLD:
+        # Update last confident BPM. Replaces the former lock/unlock
+        # hysteresis: when the estimate is confident enough to trust,
+        # remember it; effective_bpm blends toward this when later
+        # confidence drops. No latched mode — every confident frame
+        # refreshes the anchor.
+        if self._confidence >= self._CONFIDENT_THRESHOLD:
             self._last_confident_bpm = self._bpm
-            self._locked = True
-        elif self._confidence < self._UNLOCK_THRESHOLD:
-            self._locked = False
 
         # BPM delta: dual-EMA difference (fast - slow = trend)
         if self._has_estimate:
@@ -253,14 +283,21 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
             self._bpm_slow_ema = sa * self._bpm_slow_ema + (1 - sa) * self._bpm
 
     def hint_tempo(self, bpm: float) -> None:
-        """Provide external tempo hint."""
+        """Provide external tempo hint.
+
+        Sets the state to the hint value with high (but not maximum)
+        confidence, then continues normal inertia-based updating.
+        Subsequent ACF evidence can pull the estimate away if it
+        accumulates against the hint — this catches the common
+        half-time/full-time mistag (e.g., a 160 BPM tag on an actually-
+        80 BPM song) without needing a separate hint-trust check.
+        """
         if MIN_BPM <= bpm <= MAX_BPM:
             self._hint_bpm = bpm
             self._bpm = bpm
             self._last_confident_bpm = bpm
             self._confidence = 0.5
             self._has_estimate = True
-            self._locked = False
             self._bpm_fast_ema = bpm
             self._bpm_slow_ema = bpm
 
@@ -278,13 +315,13 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
         self._raw_bpm = 0.0
         self._confidence = 0.0
         self._temporal_confidence = 0.0
-        self._locked = False
         self._has_estimate = False
         self._hint_bpm = None
         self._recent_bpms.clear()
         self._last_confident_bpm = float(cfg.tempo.default_bpm)
         self._bpm_fast_ema = 0.0
         self._bpm_slow_ema = 0.0
+        self._last_timing = {'total': 0.0}
 
     @property
     def bpm(self) -> float:
@@ -313,8 +350,8 @@ class AutocorrelationTempoTracker(TempoTrackerBase):
         return self._confidence
 
     @property
-    def locked(self) -> bool:
-        return self._locked
+    def last_timing(self) -> dict[str, float]:
+        return dict(self._last_timing)
 
     @property
     def saturated(self) -> bool:

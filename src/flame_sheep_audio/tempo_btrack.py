@@ -85,11 +85,6 @@ class BTrackTempoTracker(TempoTrackerBase):
         return 0.0
 
     @property
-    def locked(self) -> bool:
-        """BTrack doesn't have a lock concept."""
-        return False
-
-    @property
     def saturated(self) -> bool:
         """BTrack doesn't saturate."""
         return False

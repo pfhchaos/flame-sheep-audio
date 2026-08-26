@@ -74,11 +74,6 @@ class TempoTrackerBase(ABC):
         pass
 
     @property
-    def locked(self) -> bool:
-        """Whether tempo is locked to a confident estimate."""
-        return False
-
-    @property
     def saturated(self) -> bool:
         """Whether the tracker has saturated (implementation-specific)."""
         return False
@@ -87,6 +82,18 @@ class TempoTrackerBase(ABC):
     def bpm_delta(self) -> float:
         """Rate of tempo change (BPM/s). Positive = accelerando."""
         return 0.0
+
+    @property
+    def last_timing(self) -> dict[str, float]:
+        """Wall-clock seconds for the most recent update, by component.
+
+        Mirror of the eval-side contract on `BeatDetector.last_timing`:
+        the 'total' key is mandatory; per-component breakdowns are
+        optional. Trackers that haven't been instrumented return
+        `{'total': 0.0}`. Populated incrementally by the tracker; safe
+        to read at any time.
+        """
+        return {'total': 0.0}
 
 
 class PercivalTempoTracker(TempoTrackerBase):

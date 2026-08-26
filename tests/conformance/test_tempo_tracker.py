@@ -35,9 +35,13 @@ class TestTempoTrackerConformance:
         assert isinstance(t.effective_bpm, (int, float))
         assert isinstance(t.confidence, (int, float))
         assert isinstance(t.phase, (int, float))
-        assert isinstance(t.locked, bool)
         assert isinstance(t.saturated, bool)
         assert isinstance(t.bpm_delta, (int, float))
+        # last_timing contract: a dict with at least a 'total' float
+        # (mirrors BeatDetector contract; eval scorecard depends on it)
+        assert isinstance(t.last_timing, dict)
+        assert 'total' in t.last_timing
+        assert isinstance(t.last_timing['total'], (int, float))
 
     @pytest.mark.parametrize("name,factory", TEMPO_CLASSES)
     def test_reset(self, name, factory):
