@@ -359,6 +359,56 @@ class AudioProcessor:
             try:
                 hop = self._agc.process(hop)
 
+                # Silence gate. The AGC zeros every sub-noise-floor
+                # sample (see _agc.AudioLevelAgc.process, step 1), so a
+                # hop with no real audio content arrives here as all
+                # zeros. `hop.any()` is a near-free C-level scan that
+                # short-circuits on the first non-zero sample — no FFT,
+                # no allocation. On silence we skip the entire analysis
+                # pipeline (CQT/push_hop, CSD onset, log-mag/stability/
+                # energy, the beat detector — BeatNet/RNN is the heavy
+                # one — and all tempo feeds), which otherwise pegs a
+                # core producing nothing. We still (a) tick the cheap
+                # ModeDetector with a zeroed state so the ~20s
+                # energy->idle transition keeps advancing, (b) publish
+                # an idle snapshot + notify so the render side settles
+                # to idle instead of freezing on the last loud frame,
+                # and (c) ping the watchdog so a long quiet stretch
+                # doesn't read as a hung thread. Full processing resumes
+                # automatically on the first non-silent hop.
+                if not hop.any():
+                    with self._data_ready:
+                        # Zero published features so the wallpaper visibly
+                        # settles rather than holding the last frame.
+                        if self._spectrum is not None:
+                            self._spectrum[:] = 0.0
+                        if self._stability_bins is not None:
+                            self._stability_bins[:] = 0.0
+                        if self._sustained_bins is not None:
+                            self._sustained_bins[:] = 0.0
+                        if self._waveform is not None:
+                            self._waveform[:] = 0.0
+                        self._centroid_delta = 0.0
+                        self._centroid_rms = 0.0
+                        self._centroid_harmonic_rms = 0.0
+                        self._slow_centroid_harmonic_rms = 0.0
+                        self._percussiveness = 0.5
+                        self._spectral_novelty = 0.0
+                        self._section_change = 0.0
+                        for name in self._bands:
+                            self._bands[name] = BandState()
+
+                        # Cheap silent tick — zeroed bands drive the mode
+                        # detector's silence path (max band rms == 0).
+                        audio_state = AudioState(bands=dict(self._bands))
+                        self._mode_detector.tick(audio_state)
+                        self._mode = self._mode_detector.mode.value
+                        self._break_intensity = 0.0
+                        self._data_ready.notify_all()
+                    if _sd_notify is not None:
+                        _sd_notify('WATCHDOG=1')
+                    continue
+
                 now = time.perf_counter()
                 raw_frame = self._spectrum_engine.push_hop(hop)
 
