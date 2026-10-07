@@ -11,6 +11,8 @@ dependencies = [
     "numpy>=2.0",
     "scipy>=1.16",
     "sounddevice>=0.5.1",
+    "dbus-python",
+    "PyGObject",
 ]
 
 [project.optional-dependencies]
