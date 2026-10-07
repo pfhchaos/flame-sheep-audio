@@ -12,7 +12,7 @@
 
 #include <pybind11/numpy.h>
 
-#include "../SlidingCqt.h"
+#include "SlidingCqt.h"
 
 namespace Cqt
 {

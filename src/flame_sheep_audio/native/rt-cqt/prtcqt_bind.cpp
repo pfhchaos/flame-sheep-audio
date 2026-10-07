@@ -18,7 +18,7 @@ namespace py = pybind11;
 
 static constexpr bool use_windowing{true};
 
-PYBIND11_MODULE(prtcqt, m)
+PYBIND11_MODULE(_prtcqt, m)
 {
     m.doc() = "Real-time Constant Q Transform (SlidingCqt)";
 

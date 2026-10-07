@@ -15,7 +15,7 @@ from ._constants import SAMPLE_RATE, HOP_SIZE
 from ._bands import a_weight_curve
 
 try:
-    import prtcqt
+    from . import _prtcqt as prtcqt
     _HAS_CQT = True
 except ImportError:
     _HAS_CQT = False

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "flame-sheep-audio"
@@ -16,5 +16,24 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.scikit-build]
+# Pin build behaviour to the installed scikit-build-core (reproducible builds).
+minimum-version = "build-system.requires"
+# CMakeLists.txt lives next to this pyproject.toml.
+cmake.source-dir = "."
+cmake.version = ">=3.15"
+# Pure-Python package is src-layout; CMake installs the `_prtcqt` extension
+# into the package dir so it imports as `flame_sheep_audio._prtcqt`.
+wheel.packages = ["src/flame_sheep_audio"]
+# Don't ship the C/C++ build inputs (the vendored rt-cqt sources) in the
+# wheel — _prtcqt is compiled from them, not loaded from them at runtime.
+# The _btrack / _native entries guard against stale, untracked prebuilt
+# binaries in a dev working tree leaking into a local build: _btrack is
+# externalized to the overlay btrack-beat-tracker package, and _native is a
+# dead leftover from an old monolithic extension (nothing imports it). A
+# clean checkout has neither; only CMake's _prtcqt ships.
+wheel.exclude = [
+    "flame_sheep_audio/native/**",
+    "flame_sheep_audio/_btrack*.so",
+    "flame_sheep_audio/_native*.so",
+]
