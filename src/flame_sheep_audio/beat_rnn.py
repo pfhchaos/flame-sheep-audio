@@ -547,7 +547,7 @@ class MultiDepthBeatRNNDetector(BeatRNNDetector):
         # Lazy import: keeps the base detector module free of an
         # eval-tree dependency; only multidepth requires the shared
         # numpy forward primitives.
-        from flame_sheep.eval.rnn_forward import unpack_weights_multidepth
+        from .rnn_forward import unpack_weights_multidepth
 
         weights_path = Path(weights_path)
         data = np.load(weights_path)
@@ -633,7 +633,7 @@ class MultiDepthBeatRNNDetector(BeatRNNDetector):
         """
         # Lazy import keeps the module load cheap when nobody uses
         # multidepth; the function itself is hot (called per frame).
-        from flame_sheep.eval.rnn_forward import step_multidepth
+        from .rnn_forward import step_multidepth
 
         weights = (self._W_in, self._b_in, self._grus, self._heads)
         head_logits, self._hiddens = step_multidepth(x, self._hiddens, weights)

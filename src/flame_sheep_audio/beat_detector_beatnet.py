@@ -1,6 +1,6 @@
 """BeatNet-Lite adapter for the daemon's BeatDetectorBase interface.
 
-Wraps `flame_sheep.eval.beatnet_lite.BeatNetLite` (pure numpy, ~2 MB
+Wraps `flame_sheep_audio.beatnet_lite.BeatNetLite` (pure numpy, ~2 MB
 install) as a daemon-compatible detector. The daemon feeds raw audio
 hops via `feed_audio_hop()`; this adapter buffers + resamples 48kHz →
 22050Hz, runs BeatNet's sliding-STFT feature pipeline + LSTM forward
@@ -98,7 +98,7 @@ class BeatNetLiveDetector(BeatDetectorBase):
 
         # Lazy import — keeps numpy-only BeatNet code out of the daemon's
         # import cost when this detector isn't selected.
-        from flame_sheep.eval.beatnet_lite import BeatNetLite
+        from .beatnet_lite import BeatNetLite
         self._lite = BeatNetLite(weights_path)
         self._lite.reset_state()
 
