@@ -27,10 +27,87 @@ helper for round-trip equivalence checks.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 # Use BeatNet's rng for parity with the upstream module's seed/state.
 from numpy.random import default_rng
+
+
+# ---------------------------------------------------------------------------
+# Resampling-mode selector + fixed-size resampler (particle-leak fix).
+#
+# The upstream correction steps APPEND reseed particles each strong-onset
+# frame, then call `universal_resample` — which is LENGTH-PRESERVING, not
+# resample-to-N — so the appended particles are never removed (the beat
+# block's compensating `np.delete` is a no-op whose result is discarded;
+# the downbeat block's delete removes only `len(first_states)`≈1 of the
+# ≈3 appended). Particle count therefore grows without bound: per-hop cost
+# climbs O(N), memory grows ∝ N, and float drift in the oversized cumsum
+# eventually throws IndexError from `np.searchsorted`.
+#
+# `_resample_to_n` resamples straight back to a fixed population size and
+# pins the final cumulative weight to 1.0, which both kills the leak and
+# removes the IndexError at its source.
+# ---------------------------------------------------------------------------
+
+_RESAMPLE_MODES = ("leaky", "systematic", "multinomial")
+
+
+def _get_resample_mode() -> str:
+    """Read the resampling mode from ``FLAMESHEEP_PF_RESAMPLE``.
+
+    One of {"leaky", "systematic", "multinomial"}; default "systematic".
+
+    - "leaky" preserves the original (buggy) append + length-preserving
+      resample + dead-delete behavior verbatim, so the eval matrix can
+      score true shipping behavior.
+    - "systematic" / "multinomial" keep the reseed append (intentional
+      diversity injection) but replace the length-preserving resample +
+      no-op delete with a resample straight back to the fixed population
+      size, so the particle count is invariant by construction.
+    """
+    mode = os.environ.get("FLAMESHEEP_PF_RESAMPLE", "systematic").strip().lower()
+    if mode not in _RESAMPLE_MODES:
+        raise ValueError(
+            f"FLAMESHEEP_PF_RESAMPLE must be one of {_RESAMPLE_MODES}, "
+            f"got {mode!r}")
+    return mode
+
+
+def _resample_to_n(particles: np.ndarray, weights: np.ndarray, n: int,
+                   rng, method: str) -> np.ndarray:
+    """Weighted resample of `particles` to EXACTLY `n` draws.
+
+    `weights` is parallel to `particles` (the per-particle observation
+    likelihoods, i.e. ``obs[particles]``). Both methods apply a
+    ``cumsum[-1] = 1.0`` float-drift guard: without it a cumulative sum
+    that lands a hair below 1.0 lets the top draw (u→1.0) fall past the
+    last bin and `np.searchsorted` returns `len(particles)` → IndexError
+    (the crash that eventually killed the leaking filter). Pinning the
+    final bin to exactly 1.0 makes that index unreachable.
+
+      - systematic:   one jittered comb, ``u = (rng.random() + arange(n)) / n``
+      - multinomial:  `n` independent uniforms + searchsorted
+    """
+    weights = np.asarray(weights, dtype=np.float64)
+    total = weights.sum()
+    if total <= 0 or len(particles) == 0:
+        # Degenerate frame (all-zero weights or empty): resample uniformly
+        # so the population size is still restored to exactly n.
+        idx = rng.integers(0, max(len(particles), 1), size=n)
+        return np.asarray(particles)[idx % max(len(particles), 1)]
+    cumsum = np.cumsum(weights / total)
+    cumsum[-1] = 1.0  # float-drift guard — kills the searchsorted IndexError
+    if method == "systematic":
+        u = (rng.random() + np.arange(n)) / n
+    elif method == "multinomial":
+        u = rng.random(n)
+    else:
+        raise ValueError(f"unknown resample method {method!r}")
+    idx = np.searchsorted(cumsum, u)
+    return np.asarray(particles)[idx]
 
 
 def _build_beat_lut(pf) -> dict[int, tuple[np.ndarray, np.ndarray]]:
@@ -114,6 +191,9 @@ def install_fast_process(pf, rng=None) -> None:
     pf._db_last_states_set = np.asarray(
         pf.st2.last_states[0], dtype=np.int64)
     pf._fast_rng = rng if rng is not None else default_rng()
+    # Resampling mode is fixed per instance at install time (read once from
+    # the environment) so a single filter never switches mid-stream.
+    pf._resample_mode = _get_resample_mode()
 
     # Import inside the function so this module can be loaded without
     # BeatNet present (e.g. tests that mock the cascade).
@@ -152,20 +232,34 @@ def install_fast_process(pf, rng=None) -> None:
                     self.down_particles, self._db_last_states_set,
                     self._db_lut, rng)
 
-                # Downbeat particles correction (unchanged from upstream).
+                # Downbeat particles correction.
+                # Reseed: inject fresh first-state particles on a strong
+                # downbeat activation (intentional diversity injection,
+                # kept in every mode).
                 if both_activations[i][1] > 0.7:
                     self.down_particles = np.append(
                         self.down_particles,
                         np.array([self.st2.first_states]))
                 obs2 = down_densities(both_activations[i], self.om2, self.st2)
-                self.down_particles = universal_resample(
-                    self.down_particles, obs2[self.down_particles])
-                if both_activations[i][1] > 0.7:
-                    self.down_particles = np.delete(
-                        self.down_particles,
-                        np.random.choice(self.down_particle_size,
-                                          len(self.st2.first_states),
-                                          replace=False))
+                if self._resample_mode == "leaky":
+                    # BUG-PRESERVING PATH (eval matrix only): length-
+                    # preserving resample, then a delete that removes only
+                    # len(first_states) (≈1) of the ≈3 just appended, so
+                    # down_particles grows across strong-downbeat frames.
+                    self.down_particles = universal_resample(
+                        self.down_particles, obs2[self.down_particles])
+                    if both_activations[i][1] > 0.7:
+                        self.down_particles = np.delete(
+                            self.down_particles,
+                            np.random.choice(self.down_particle_size,
+                                              len(self.st2.first_states),
+                                              replace=False))
+                else:
+                    # FIXED PATH: resample straight back to the fixed
+                    # population size — count invariant, no post-hoc delete.
+                    self.down_particles = _resample_to_n(
+                        self.down_particles, obs2[self.down_particles],
+                        self.down_particle_size, rng, self._resample_mode)
                 m = np.bincount(self.down_particles)
                 self.down_max = np.argmax(m)
 
@@ -185,22 +279,38 @@ def install_fast_process(pf, rng=None) -> None:
             self.particles = _vectorized_motion(
                 self.particles, self._last_states_set, self._beat_lut, rng)
 
-            # Beat particles correction (unchanged from upstream).
+            # Beat particles correction.
             obs = beat_densities(activations[i], self.om, self.st)
-            if activations[i] > 0.1:
+            if activations[i] > 0.1:  # resample only on meaningful activation
+                # Reseed: inject fresh first-state particles on a strong
+                # beat activation (intentional diversity injection, kept in
+                # every mode).
                 if activations[i] > 0.8:
                     self.particles = np.append(
                         self.particles,
                         np.array([self.st.first_states[0][np.arange(
                             np.random.randint(4),
                             len(self.st.first_states[0]), 6)]]))
-                self.particles = universal_resample(
-                    self.particles, obs[self.particles])
-                if activations[i] > 0.8:
-                    np.delete(self.particles,
-                              np.random.choice(self.particle_size,
-                                                len(self.st.first_states),
-                                                replace=False))
+                if self._resample_mode == "leaky":
+                    # BUG-PRESERVING PATH (eval matrix only): length-
+                    # preserving resample, then an np.delete whose result is
+                    # DISCARDED (never assigned back) → a no-op. Every
+                    # strong-beat reseed sticks, so particles grows
+                    # unbounded (≈+7/strong-frame), per-hop cost climbs O(N),
+                    # and the oversized cumsum eventually throws IndexError.
+                    self.particles = universal_resample(
+                        self.particles, obs[self.particles])
+                    if activations[i] > 0.8:
+                        np.delete(self.particles,
+                                  np.random.choice(self.particle_size,
+                                                    len(self.st.first_states),
+                                                    replace=False))
+                else:
+                    # FIXED PATH: resample straight back to the fixed
+                    # population size — count invariant, no dead delete.
+                    self.particles = _resample_to_n(
+                        self.particles, obs[self.particles],
+                        self.particle_size, rng, self._resample_mode)
         return self.path[1:]
 
     # Bind as a method on this instance.

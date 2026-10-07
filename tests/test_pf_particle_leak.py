@@ -1,0 +1,144 @@
+"""Regression tests for the particle-filter particle-count leak.
+
+Background
+----------
+BeatNet's `particle_filter_cascade.process()` (driven in production via the
+vectorized `_pf_fast.install_fast_process`) has two correction blocks — one
+for beat particles, one for downbeat particles — that each APPEND reseed
+particles on a strong-onset frame and then call `universal_resample`, which
+is LENGTH-PRESERVING (it returns `len(particles)` samples, it does NOT
+resample to a fixed N). The compensating deletes never remove what was
+appended:
+
+  * beat block:     `np.delete(...)` result is discarded (never assigned)
+                    -> a no-op. Every strong-beat reseed sticks (+≈7/frame).
+  * downbeat block: `np.delete(..., len(first_states))` removes ≈1 of the
+                    ≈3 just appended (+≈2/gated-strong-frame).
+
+So the populations grow without bound across strong-onset frames: per-hop
+cost climbs O(N), memory grows ∝ N, and float drift in the oversized cumsum
+eventually throws IndexError from `np.searchsorted`. On the live wallpaper
+daemon (continuous audio, never reset) this pins a core.
+
+The fix (`FLAMESHEEP_PF_RESAMPLE` ∈ {systematic, multinomial}) keeps the
+reseed append but replaces the length-preserving resample + dead delete
+with `_resample_to_n(..., particle_size, ...)` / `down_particle_size`, so
+the population size is invariant by construction. `leaky` preserves the old
+behavior verbatim (for the eval matrix / this test's negative case).
+
+What these tests pin
+--------------------
+  * fixed modes keep EXACTLY particle_size (1500) and down_particle_size
+    (250) after a heavy strong-onset load  -> leak dead, count invariant.
+  * leaky mode GROWS both populations                 -> the bug is real
+    and these tests would catch its reintroduction.
+
+The PF is driven directly (no LSTM / audio frontend) with synthetic
+all-strong activation frames, which exercise BOTH correction blocks (the
+downbeat block's clutter gate fires under a sustained strong-onset load).
+Construction mirrors `beat_detector_beatnet.BeatNetLiveDetector.
+_make_particle_filter` (particle_size=1500, down_particle_size=250, fps=50)
+so this is the production particle filter, not a reimplementation.
+"""
+from __future__ import annotations
+
+import os
+
+import numpy as np
+import pytest
+
+# Production population sizes (see _make_particle_filter).
+PARTICLE_SIZE = 1500
+DOWN_PARTICLE_SIZE = 250
+
+# 50 fps -> frames-per-minute. The fast tests use a few-minute-equivalent
+# stressor (every frame a strong onset, the worst case for the reseed
+# path); the slow test uses the full 15-minute-equivalent spec.
+FPS = 50
+FAST_FRAMES = 4000      # ~80 s equivalent; leaks both populations massively
+LEAKY_FRAMES = 1000     # ~20 s; enough to grow both counts, fast under leaky
+SLOW_FRAMES = 15 * 60 * FPS  # 45000 == 15 min @ 50 fps
+SEED = 20260101
+
+
+def _build_pf(mode: str):
+    """Construct the production particle filter in `mode`, deterministically.
+
+    Sets FLAMESHEEP_PF_RESAMPLE *before* install (the mode is read once, at
+    install time) and pins both RNG sources: numpy-global (the correction
+    blocks' `np.random.*`) and the fast-path rng passed to
+    `install_fast_process`.
+    """
+    # numpy<2.0 compat shim the production adapter also applies.
+    if not hasattr(np, "in1d"):
+        np.in1d = np.isin  # type: ignore[attr-defined]
+    os.environ["FLAMESHEEP_PF_RESAMPLE"] = mode
+    from BeatNet.particle_filtering_cascade import particle_filter_cascade
+    from flame_sheep_audio._pf_fast import install_fast_process
+
+    np.random.seed(SEED)
+    pf = particle_filter_cascade(
+        beats_per_bar=[],
+        particle_size=PARTICLE_SIZE,
+        down_particle_size=DOWN_PARTICLE_SIZE,
+        min_bpm=55.0, max_bpm=215.0,
+        fps=FPS, plot=[], mode=None)
+    install_fast_process(pf, rng=np.random.default_rng(SEED))
+    return pf
+
+
+def _strong_onset_activations(n_frames: int) -> np.ndarray:
+    """`n_frames` of (beat, downbeat) activations, all strongly onset.
+
+    Both columns 0.9 -> every frame trips the >0.8 beat reseed and the >0.7
+    downbeat reseed, the worst case for the leak.
+    """
+    return np.full((n_frames, 2), 0.9, dtype=np.float64)
+
+
+@pytest.fixture(autouse=True)
+def _restore_resample_env():
+    """Don't leak FLAMESHEEP_PF_RESAMPLE into other tests / the user env."""
+    prev = os.environ.get("FLAMESHEEP_PF_RESAMPLE")
+    yield
+    if prev is None:
+        os.environ.pop("FLAMESHEEP_PF_RESAMPLE", None)
+    else:
+        os.environ["FLAMESHEEP_PF_RESAMPLE"] = prev
+
+
+@pytest.mark.parametrize("mode", ["systematic", "multinomial"])
+def test_fixed_modes_keep_population_size(mode):
+    """Both fix variants keep the populations EXACTLY at their fixed sizes
+    after a heavy strong-onset load — the leak is dead and the count is
+    invariant by construction (resample-to-N, no post-hoc delete)."""
+    pf = _build_pf(mode)
+    assert pf._resample_mode == mode
+    pf.process(_strong_onset_activations(FAST_FRAMES))
+    assert len(pf.particles) == PARTICLE_SIZE
+    assert len(pf.down_particles) == DOWN_PARTICLE_SIZE
+
+
+def test_leaky_mode_grows_both_populations():
+    """The preserved-bug path leaks: both populations grow past their fixed
+    sizes under the same load. This is the negative control — if a future
+    change silently 'fixes' leaky (or the fix path regresses to leaking),
+    exactly one of these two tests flips."""
+    pf = _build_pf("leaky")
+    assert pf._resample_mode == "leaky"
+    pf.process(_strong_onset_activations(LEAKY_FRAMES))
+    assert len(pf.particles) > PARTICLE_SIZE, "beat population did not leak"
+    assert len(pf.down_particles) > DOWN_PARTICLE_SIZE, \
+        "downbeat population did not leak"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mode", ["systematic", "multinomial"])
+def test_fixed_modes_invariant_over_15_minutes(mode):
+    """Full 15-minute-equivalent (45000 frames @ 50 fps) all-strong load:
+    the population stays pinned to its fixed size the whole way, confirming
+    the invariant holds at the scale that pins a core under `leaky`."""
+    pf = _build_pf(mode)
+    pf.process(_strong_onset_activations(SLOW_FRAMES))
+    assert len(pf.particles) == PARTICLE_SIZE
+    assert len(pf.down_particles) == DOWN_PARTICLE_SIZE
