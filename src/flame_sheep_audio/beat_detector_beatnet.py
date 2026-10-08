@@ -58,9 +58,9 @@ class BeatNetLiveDetector(BeatDetectorBase):
     all work happens in `feed_audio_hop`. BeatEvents accumulate
     between detect() calls and are returned on the next detect().
 
-    Construction reads the lite weights from
-    `flame_sheep/data/beatnet_m{N}_lite.npz` by default (configurable
-    via the daemon's `cfg.detector.beatnet_weights_path`).
+    Construction reads the lite weights from this package's data dir
+    (`flame_sheep_audio/data/beatnet_m{N}_lite.npz`) by default
+    (configurable via the daemon's `cfg.detector.beatnet_weights_path`).
     """
 
     def __init__(self,
@@ -76,20 +76,12 @@ class BeatNetLiveDetector(BeatDetectorBase):
         # but BeatNet doesn't use them — the spectrum / band structure
         # is internal to the model.
         if weights_path is None:
-            # Default lookup matches what tools/export_beatnet_lite_weights.py
-            # writes. Two-step: try repo-relative (development), then
-            # package-data-relative (installed).
-            here = Path(__file__).resolve()
-            repo_default = (here.parents[3]
-                            / 'flame_sheep' / 'data'
-                            / f'beatnet_m{model_index}_lite.npz')
-            if repo_default.exists():
-                weights_path = repo_default
-            else:
-                # Fall back to in-package data (not yet wired but a
-                # natural future location once we package for distribution).
-                pkg_default = here.parent / 'data' / f'beatnet_m{model_index}_lite.npz'
-                weights_path = pkg_default
+            # Package default: the lite weights ship in this package's own
+            # data dir (0.4 relocation — each package carries what it loads).
+            # An explicit weights_path (from cfg.detector.beatnet_weights_path)
+            # still overrides this.
+            weights_path = (Path(__file__).resolve().parent
+                            / 'data' / f'beatnet_m{model_index}_lite.npz')
         weights_path = Path(weights_path)
         if not weights_path.exists():
             raise FileNotFoundError(

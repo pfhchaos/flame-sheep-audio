@@ -219,12 +219,14 @@ class AudioProcessor:
                 freqs=freqs,
             )
         if kind == 'rnn':
+            from pathlib import Path
             from .beat_rnn import load_beat_rnn
-            weights_path = getattr(cfg.detector, 'rnn_weights_path', '')
+            weights_path = getattr(cfg.detector, 'rnn_weights_path', None)
             if not weights_path:
-                raise ValueError(
-                    'detector.kind="rnn" requires detector.rnn_weights_path '
-                    'to be set in config (path to beat_rnn_continuous.npz)')
+                # None/empty → package default (0.4 relocation): the multidepth
+                # model ships in this package's own data dir.
+                weights_path = (Path(__file__).resolve().parent
+                                / 'data' / 'beat_rnn_multidepth.npz')
             def _opt_float(key):
                 v = getattr(cfg.detector, key, None)
                 return float(v) if v is not None else None

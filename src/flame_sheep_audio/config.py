@@ -54,8 +54,9 @@ DEFAULTS = {
         'kind': 'percentile',
         # BeatNet-lite config. Only consulted when kind == 'beatnet_lite'.
         # `beatnet_model_index`: 1 (GTZAN-trained, default), 2 (Ballroom),
-        #   3 (Rock). Weights path is auto-resolved from
-        #   `flame_sheep/data/beatnet_m{N}_lite.npz` unless overridden.
+        #   3 (Rock). Weights path is auto-resolved from this package's data
+        #   dir (`flame_sheep_audio/data/beatnet_m{N}_lite.npz`) unless
+        #   overridden.
         # `beatnet_peak_threshold`: any-beat (1-non_beat) peak threshold.
         # `beatnet_downbeat_threshold`: downbeat channel threshold; typically
         #   lower than the beat threshold because downbeat activations are
@@ -68,12 +69,15 @@ DEFAULTS = {
         'beatnet_downbeat_threshold': 0.15,
         'beatnet_min_distance_frames': 3,
         # RNN-specific config. Only consulted when kind == 'rnn'.
-        # Default path is the multidepth stacked-GRU model trained
-        # 2026-05-31 (val_loss=0.4229 mid-epoch 4 checkpoint, beats
-        # the 3head baseline). Architecture dims are auto-discovered
-        # from the file via load_beat_rnn — the 'architecture' field
-        # in the .npz dispatches to MultiDepthBeatRNNDetector.
-        'rnn_weights_path': 'flame_sheep/data/beat_rnn_multidepth.npz',
+        # None means "package default": the multidepth stacked-GRU model
+        # (trained 2026-05-31, val_loss=0.4229 mid-epoch 4 checkpoint, beats
+        # the 3head baseline) shipped in this package's data dir
+        # (`flame_sheep_audio/data/beat_rnn_multidepth.npz`), resolved in
+        # processor.py. Set an explicit path to override. Architecture dims
+        # are auto-discovered from the file via load_beat_rnn — the
+        # 'architecture' field in the .npz dispatches to
+        # MultiDepthBeatRNNDetector.
+        'rnn_weights_path': None,
         # rnn_threshold is the default per-head threshold. For multi-head
         # models, the per-head overrides below are what you actually want
         # to tune — different heads have different output ranges. Defaults
