@@ -17,6 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
+# BeatNet (pip) is only imported for the particle-filter beat-tracking path
+# (use_particle_filter=True); the default BeatNetLite detector is pure-numpy and
+# in-package. BeatNet drags torch/madmom/librosa, so it's opt-in.
+beatnet = ["BeatNet"]
+# sd_notify watchdog integration (processor.py); degrades to a no-op without it.
+watchdog = ["systemd-python"]
 
 [tool.scikit-build]
 # Pin build behaviour to the installed scikit-build-core (reproducible builds).

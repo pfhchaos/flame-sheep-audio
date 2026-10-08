@@ -13,10 +13,7 @@ Call `cfg.reload()` to re-read from disk.
 from __future__ import annotations
 
 import logging
-try:
-    import tomllib  # 3.11+
-except ImportError:  # pragma: no cover — 3.10 fallback for the beatnet venv
-    import tomli as tomllib  # type: ignore[no-redef]
+import tomllib  # stdlib (requires-python >= 3.12)
 from pathlib import Path
 from types import SimpleNamespace
 from collections.abc import Callable
