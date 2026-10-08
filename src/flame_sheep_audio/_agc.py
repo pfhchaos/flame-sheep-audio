@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ._paths import data_dir
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_TARGET_RMS: float = 0.1
@@ -47,8 +49,7 @@ _DEFAULT_SAVE_INTERVAL_SEC: float = 30.0
 
 
 def _state_path_default() -> Path:
-    return (Path.home() / '.local' / 'share' / 'flame-sheep'
-            / 'agc_state.json')
+    return data_dir() / 'agc_state.json'
 
 
 class AudioLevelAgc:

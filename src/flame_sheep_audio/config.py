@@ -19,9 +19,11 @@ from types import SimpleNamespace
 from collections.abc import Callable
 from typing import Any
 
+from ._paths import config_dir
+
 log = logging.getLogger(__name__)
 
-CONFIG_PATH = Path.home() / '.config' / 'flame-sheep' / 'audio.toml'
+CONFIG_PATH = config_dir() / 'audio.toml'
 
 DEFAULTS = {
     'detection': {
