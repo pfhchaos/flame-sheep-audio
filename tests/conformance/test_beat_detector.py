@@ -24,7 +24,15 @@ DETECTOR_CLASSES = [
 #   - require an on-disk weights file
 # Their conformance is covered by tests/audio/test_beat_rnn_streaming.py
 # (real weights file, real spectrum shape).
-_BIN_COUNT_AGNOSTIC_EXEMPT = {'BeatRNNDetector', 'MultiDepthBeatRNNDetector'}
+#
+# BeatNetLiveDetector is exempt for the same reason: it consumes the raw
+# waveform (ignoring the magnitude bins entirely) and needs an on-disk
+# BeatNet-lite weights file, so the bin-count-parametrized suite can't drive
+# it. Covered by tests/test_beatnet_live_detector.py (real weights,
+# skip-if-absent), with the particle-filter path covered by
+# tests/test_pf_particle_leak.py.
+_BIN_COUNT_AGNOSTIC_EXEMPT = {'BeatRNNDetector', 'MultiDepthBeatRNNDetector',
+                              'BeatNetLiveDetector'}
 
 
 def test_all_beat_detectors_registered():
