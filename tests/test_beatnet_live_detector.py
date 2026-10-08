@@ -4,7 +4,7 @@ It is exempt from the bin-count-parametrized suite in
 tests/conformance/test_beat_detector.py because it consumes the raw waveform
 (not the magnitude bins, which it ignores) and requires an on-disk BeatNet-lite
 weights file — so that suite can't drive it. This mirrors the skip-if-no-weights
-pattern used for the RNN detectors in tests/audio/test_beat_rnn_streaming.py.
+pattern used for the RNN detectors in test_beat_rnn_streaming.py.
 The particle-filter path it can run is covered separately by
 test_pf_particle_leak.py.
 """

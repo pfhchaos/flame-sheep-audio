@@ -22,7 +22,7 @@ DETECTOR_CLASSES = [
 # satisfy. BeatRNNDetector + MultiDepthBeatRNNDetector both:
 #   - require a 108-bin CQT spectrum (model trained on librosa CQT)
 #   - require an on-disk weights file
-# Their conformance is covered by tests/audio/test_beat_rnn_streaming.py
+# Their conformance is covered by ../test_beat_rnn_streaming.py
 # (real weights file, real spectrum shape).
 #
 # BeatNetLiveDetector is exempt for the same reason: it consumes the raw

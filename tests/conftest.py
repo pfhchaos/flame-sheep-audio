@@ -37,4 +37,26 @@ def _hermetic_audio_config():
     cfg.reset_to_defaults()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_data_dir(tmp_path, monkeypatch):
+    """Point the XDG data/config dirs at a fresh per-test temp location so
+    no test reads or writes the real ~/.local/share/flame-sheep.
+
+    Critically this isolates the AGC's persisted gain state. Every
+    AudioProcessor builds an AudioLevelAgc that, on construction, LOADS
+    slow_rms from data_dir()/agc_state.json and periodically SAVES it back
+    (processor.py — "Not optional: signal conditioning"). That on-disk file
+    is shared across tests AND across pytest runs, so without isolation the
+    gain calibration leaks between them — shifting the detection thresholds
+    and making the threshold-sensitive beat-detection tests
+    (test_beat_engine, test_pipeline) flaky and order-dependent (it was the
+    cross-run 153/153-vs-145/153 non-determinism). A fresh empty dir per
+    test means the AGC finds no saved state and bootstraps at target every
+    time => deterministic, order-independent. Production persistence is
+    intentional and untouched; this only sandboxes the tests."""
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg-config'))
+    yield
+
+
 __all__ = ['make_processor', 'make_sine', 'make_silence', 'make_impulse', 'feed_audio']
