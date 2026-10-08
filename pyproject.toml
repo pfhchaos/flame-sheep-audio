@@ -24,6 +24,12 @@ beatnet = ["BeatNet"]
 # sd_notify watchdog integration (processor.py); degrades to a no-op without it.
 watchdog = ["systemd-python"]
 
+[project.scripts]
+# Installs `flame-sheep-audio` on PATH -> the daemon entry point. The vendored
+# systemd user unit (data/systemd/flame-sheep-audio.service) runs this, so
+# ExecStart no longer hardcodes a dev virtualenv path.
+flame-sheep-audio = "flame_sheep_audio.daemon:main"
+
 [tool.scikit-build]
 # Pin build behaviour to the installed scikit-build-core (reproducible builds).
 minimum-version = "build-system.requires"

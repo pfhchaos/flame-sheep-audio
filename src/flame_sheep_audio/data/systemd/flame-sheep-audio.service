@@ -1,0 +1,34 @@
+[Unit]
+Description=Flame Sheep audio analysis daemon
+# pipewire is the typical session audio backend; the daemon needs an audio source.
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service
+# Rate-limit restarts to prevent runaway crash-loops eating CPU.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=simple — the daemon is ready as soon as it's forked; the wallpaper's
+# AudioDaemonClient watches NameOwnerChanged and reconnects when the dbus name
+# actually appears. (Type=dbus was tried but doesn't fit hosts running two
+# session buses — it watches the systemd-managed bus and false-times-out.)
+Type=simple
+# Installed console script (entry point flame_sheep_audio.daemon:main), resolved
+# from PATH — NOT a developer virtualenv. PYTHONUNBUFFERED replaces the old
+# `python -u` so log lines flush to the journal promptly.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=flame-sheep-audio
+# Auto-restart on crash. The dual singleton lock (PID file + dbus name claim
+# with do_not_queue=True) makes this safe against duplicate launches.
+Restart=on-failure
+RestartSec=2
+# Watchdog: the audio thread calls sd_notify("WATCHDOG=1") after each hop write
+# (~10.7 ms). 5 s tolerance -> systemd kills + restarts if the audio thread
+# hangs or every frame fails for ~half a second — the silent-failure mode that
+# bit on 2026-06-14 (PF crashed, process stayed alive, features froze for days).
+WatchdogSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
