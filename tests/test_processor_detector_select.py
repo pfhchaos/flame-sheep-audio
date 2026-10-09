@@ -10,13 +10,17 @@ from pathlib import Path
 
 import pytest
 
-_PROJECT = Path(__file__).resolve().parents[2]
-
 from flame_sheep_audio.config import cfg
 from flame_sheep_audio.source import FeedSource
+import flame_sheep_audio
 
 
-WEIGHTS = _PROJECT / 'flame_sheep' / 'data' / 'beat_rnn_continuous.npz'
+# A real packaged weights file, resolved from the installed package so it's
+# robust to repo layout — the RNN weights ship in flame_sheep_audio/data/ as
+# of phase 0.4. (Was flame_sheep/data/beat_rnn_continuous.npz via parents[2],
+# which broke when this package split into its own repo.)
+WEIGHTS = (Path(flame_sheep_audio.__file__).resolve().parent
+           / 'data' / 'beat_rnn_multidepth.npz')
 
 
 def _make_processor():
@@ -52,15 +56,21 @@ def test_explicit_flux_selects_flux():
         cfg.reload()
 
 
-def test_rnn_requires_weights_path():
-    """detector.kind='rnn' with empty weights path must raise; the
-    daemon should fail loud rather than silently fall back."""
+def test_rnn_empty_path_resolves_to_packaged_weights():
+    """detector.kind='rnn' with no explicit weights path resolves to the
+    multidepth model shipped in the package's data dir, rather than failing.
+
+    This previously asserted an empty path must raise ValueError — a
+    'fail loud' contract deliberately replaced in phase 0.4, when the RNN
+    weights were bundled into the package and processor._build_detector began
+    falling back to data/beat_rnn_multidepth.npz on an empty/None path.
+    """
     cfg.reload()
     cfg.detector.kind = 'rnn'
-    cfg.detector.rnn_weights_path = ''   # force empty even if user toml sets one
+    cfg.detector.rnn_weights_path = ''   # empty -> packaged default
     try:
-        with pytest.raises(ValueError, match='rnn_weights_path'):
-            _make_processor()
+        proc = _make_processor()
+        assert 'RNN' in type(proc._detector).__name__
     finally:
         cfg.reload()
 
