@@ -21,7 +21,6 @@ from flame_sheep_audio.hpss import (
     HarmonicTransform, PercussiveTransform,
 )
 from flame_sheep_audio.energy import EnergyAnalyzer
-from flame_sheep_audio.response import MelCentroid
 
 # Typical engine sizes: FFT=1025, CQT/octave=108, multires=64
 SIZE_PAIRS = [
@@ -195,32 +194,3 @@ class TestEnergySizeChange:
         flux = np.abs(np.random.randn(n_bins).astype(np.float32))
         energy.update(mag, flux)
         assert isinstance(energy.centroid, float)
-
-
-# -- MelCentroid --
-
-class TestMelCentroidSizeChange:
-    """MelCentroid must expose n_bins and handle mismatched input."""
-
-    def test_n_bins_property(self):
-        freqs = np.linspace(0, 22050, 1025).astype(np.float32)
-        mc = MelCentroid(freqs)
-        assert mc.n_bins == 1025
-
-    @pytest.mark.parametrize("size_a,size_b", SIZE_PAIRS)
-    def test_recreate_on_size_change(self, size_a, size_b):
-        """Simulates the lazy-reinit pattern used by axes."""
-        freqs_a = np.linspace(0, 22050, size_a).astype(np.float32)
-        mc = MelCentroid(freqs_a)
-        mag_a = np.abs(np.random.randn(size_a).astype(np.float32))
-        result_a = mc.compute(mag_a)
-        assert isinstance(result_a, float)
-
-        # Size changes — caller should detect and rebuild
-        assert mc.n_bins != size_b
-        freqs_b = np.linspace(0, 22050, size_b).astype(np.float32)
-        mc = MelCentroid(freqs_b)
-        assert mc.n_bins == size_b
-        mag_b = np.abs(np.random.randn(size_b).astype(np.float32))
-        result_b = mc.compute(mag_b)
-        assert isinstance(result_b, float)

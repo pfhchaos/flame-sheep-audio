@@ -33,8 +33,5 @@ from .source import PipeWireSource, FeedSource
 # Mode detection
 from .mode import Mode, ModeDetector
 
-# Response library (viz-side signal processing toolkit)
-from . import response
-
 # Processor classes
 from .processor import AudioProcessor, SyntheticAudioProcessor, list_monitor_devices
