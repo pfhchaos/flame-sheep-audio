@@ -62,7 +62,7 @@ class AudioDaemon:
         atexit.register(self._cleanup)
 
         # D-Bus service
-        schema = generate_schema(self._layout)
+        schema = generate_schema(self._layout, engine.bin_centers)
         from .dbus_service import AudioDbusService
         self._dbus = AudioDbusService(schema, SHM_NAME)
 

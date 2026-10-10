@@ -108,14 +108,21 @@ def compute_layout(n_bins: int, band_names: list[str]) -> ShmLayout:
     return layout
 
 
-def generate_schema(layout: ShmLayout) -> dict:
-    """Generate JSON-serializable schema for dbus GetSchema()."""
+def generate_schema(layout: ShmLayout, bin_freqs) -> dict:
+    """Generate JSON-serializable schema for dbus GetSchema().
+
+    `bin_freqs` (required) is the spectrum engine's per-bin center
+    frequencies (Hz). The daemon owns the engine, so it publishes the
+    authoritative mapping here — clients must not reconstruct it from bin
+    count + assumed params. The schema carries everything the client needs.
+    """
     return {
         'version': 1,
         'shm_name': SHM_NAME,
         'size': SHM_SIZE,
         'n_bins': layout.n_bins,
         'band_names': layout.band_names,
+        'bin_freqs': [float(f) for f in bin_freqs],
         'fields': {
             'seq': {'offset': layout.seq, 'type': 'u64', 'count': 1},
             'n_bins': {'offset': layout.actual_n_bins, 'type': 'u32', 'count': 1},
